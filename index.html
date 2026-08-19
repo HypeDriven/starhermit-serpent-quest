@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Serpent Quest — steer a growing serpent through colorful garden arenas.">
+  <meta name="theme-color" content="#2f5d3a">
+  <title>Serpent Quest</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%2346b364'/%3E%3Ccircle cx='12' cy='13' r='2.5' fill='%23fff'/%3E%3Ccircle cx='20' cy='13' r='2.5' fill='%23fff'/%3E%3C/svg%3E">
+</head>
+<body>
+  <div id="app">
+    <!-- Boot / loading -->
+    <div id="loading" role="status" aria-live="polite">
+      <div class="loading-card">
+        <div class="loading-mark" aria-hidden="true">◍</div>
+        <h1>Serpent Quest</h1>
+        <p id="loading-label">Waking the garden…</p>
+        <progress id="loading-bar" max="100" value="10">10%</progress>
+      </div>
+    </div>
+
+    <!-- WebGL compatibility message (shown only when 3D is unavailable) -->
+    <div id="compat" hidden role="alert">
+      <div class="loading-card">
+        <h1>Serpent Quest</h1>
+        <p>This garden needs WebGL to grow, and your browser could not provide it.
+        Your profile and progress are safe on this device. Try a current version of
+        Chrome, Edge, Firefox, or Safari.</p>
+      </div>
+    </div>
+
+    <!-- Top safe-area status bar -->
+    <header id="topbar" hidden>
+      <button id="chip-profile" class="chip" type="button" aria-label="Profile">
+        <span id="chip-avatar" aria-hidden="true"></span><span id="chip-name">Guest</span>
+      </button>
+      <div id="topbar-center">
+        <button id="chip-daily" class="chip" type="button"></button>
+      </div>
+      <div class="topbar-actions">
+        <button id="btn-help-top" class="icon-btn" type="button" aria-label="Help">?</button>
+        <button id="btn-settings-top" class="icon-btn" type="button" aria-label="Settings">⚙</button>
+      </div>
+    </header>
+
+    <!-- Main stage: rails + playfield -->
+    <main id="stage" hidden>
+      <aside id="rail-left" aria-label="Objective and progression"></aside>
+      <div id="canvas-wrap">
+        <canvas id="game-canvas" aria-hidden="true"></canvas>
+        <div id="hud" hidden>
+          <div id="hud-top">
+            <div id="hud-objective" role="status"></div>
+            <div id="hud-score" aria-label="Score"></div>
+          </div>
+          <div id="countdown" hidden aria-hidden="true"></div>
+          <div id="toast" role="status" aria-live="polite" hidden></div>
+          <div id="caption" role="status" aria-live="polite" hidden></div>
+        </div>
+        <div id="action-tray" hidden>
+          <div class="tray-cluster" id="tray-left"></div>
+          <div class="tray-cluster" id="tray-right"></div>
+        </div>
+      </div>
+      <aside id="rail-right" aria-label="Status and score"></aside>
+    </main>
+
+    <!-- Screen overlays (semantic HTML over the canvas) -->
+    <div id="screens"></div>
+
+    <!-- Accessible board mirror: concise navigable model of the 3D scene -->
+    <section id="board-mirror" class="visually-hidden" aria-label="Board state description" tabindex="-1"></section>
+
+    <!-- Live regions -->
+    <div id="live-polite" class="visually-hidden" role="status" aria-live="polite"></div>
+    <div id="live-assertive" class="visually-hidden" role="alert" aria-live="assertive"></div>
+
+    <noscript>
+      <p style="padding:2rem;text-align:center">Serpent Quest needs JavaScript to run.</p>
+    </noscript>
+  </div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

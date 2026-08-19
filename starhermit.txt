@@ -1,0 +1,3 @@
+name=Serpent Quest
+launch=index.html
+server=server.js
