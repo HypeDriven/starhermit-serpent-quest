@@ -21,6 +21,28 @@ const MELODY = [69, 72, 74, 76, 79, 76, 74, 72, 69, 72, 74, 79, 81, 79, 76, 74];
 const BASS_LINE = [45, 45, 41, 43]; // A2 A2 F2 G2
 const SCALE = [57, 60, 62, 64, 67, 69, 72, 74, 76, 79]; // A3.. pentatonic
 
+// Authored sample one-shots (authored per sfx/manifest.json). Each maps an
+// existing event name to a clip basename under sfx/. Samples are fetched and
+// decoded lazily after the user-gesture unlock; synthesis remains the
+// fallback while a clip is loading or if it fails to load.
+const SAMPLE_FOR_EVENT = {
+  'turn': 'turn-tick',
+  'eat': 'eat-fruit',
+  'eat-golden': 'eat-golden-chime',
+  'grow': 'grow-swell',
+  'rival-defeated': 'rival-defeated-hit',
+  'death': 'death-thud',
+  'win': 'win-fanfare',
+  'invalid': 'invalid-buzz',
+  'countdown': 'countdown-tick',
+  'go': 'go-chime',
+  'undo': 'undo-sweep',
+  'ui-click': 'ui-click',
+  'ui-back': 'ui-back',
+  'pause': 'pause-swell',
+  'achievement': 'achievement-chime',
+};
+
 const CAPTIONS = {
   'eat': 'Cheerful blip — food eaten',
   'eat-golden': 'Sparkling chime — golden fruit',
@@ -49,6 +71,9 @@ export function createAudio(opts) {
 
   let ambience = null;     // { stop() } handle for current ambience
   let music = null;        // scheduler state
+
+  // Sample cache: basename -> { state: 'loading'|'ready'|'failed', buffer }
+  const sampleCache = new Map();
 
   const settings = () => {
     try { return getSettings() || {}; } catch (_) { return {}; }
@@ -199,10 +224,47 @@ export function createAudio(opts) {
     },
   };
 
+  // --- authored sample one-shots (lazy, post-unlock) -------------------------
+
+  // Fetch + decode sfx/<name>.opus once; cache the result or the failure.
+  function loadSample(name) {
+    if (!ctx || disposed || sampleCache.has(name)) return;
+    const entry = { state: 'loading', buffer: null };
+    sampleCache.set(name, entry);
+    fetch('sfx/' + name + '.opus')
+      .then((r) => {
+        if (!r.ok) throw new Error('http-' + r.status);
+        return r.arrayBuffer();
+      })
+      .then((ab) => (disposed || !ctx ? null : ctx.decodeAudioData(ab)))
+      .then((buf) => {
+        if (buf) { entry.state = 'ready'; entry.buffer = buf; }
+        else entry.state = 'failed';
+      })
+      .catch(() => { entry.state = 'failed'; }); // permanent synth fallback
+  }
+
+  function playSample(buffer) {
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(buses.sfx);
+    src.start();
+  }
+
   function play(name, o) {
     if (!ctx || disposed) return;
     try {
       if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+      const sampleName = SAMPLE_FOR_EVENT[name];
+      if (sampleName) {
+        const entry = sampleCache.get(sampleName);
+        if (entry && entry.state === 'ready') {
+          playSample(entry.buffer); // prefer the authored clip; synth stays silent
+          return;
+        }
+        if (!entry) loadSample(sampleName);
+        // loading or failed: fall through to procedural synthesis
+      }
       const fn = SFX[name];
       if (fn) fn(o || {});
     } catch (_) { /* fail silent */ }
@@ -424,6 +486,8 @@ export function createAudio(opts) {
         buildGraph();
       }
       if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+      // User gesture has unlocked the context: start lazy-loading samples.
+      for (const name of Object.values(SAMPLE_FOR_EVENT)) loadSample(name);
     } catch (_) {
       ctx = null; master = null; buses = null;
     }
@@ -446,6 +510,7 @@ export function createAudio(opts) {
     try { stopMusic(); } catch (_) {}
     try { if (ctx) ctx.close().catch(() => {}); } catch (_) {}
     ctx = null; master = null; buses = null; noiseBuf = null;
+    sampleCache.clear();
   }
 
   return {

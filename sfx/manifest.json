@@ -1,0 +1,92 @@
+[
+  {
+    "name": "turn-tick",
+    "seconds": 1,
+    "prompt": "A single soft, dry wooden tick, like a fingertip tapping a hollow bamboo block, very short and quiet.",
+    "event": "turn"
+  },
+  {
+    "name": "eat-fruit",
+    "seconds": 1,
+    "prompt": "A crisp juicy bite into a ripe apple with a bright wet crunch and a short cheerful pop.",
+    "event": "eat"
+  },
+  {
+    "name": "eat-golden-chime",
+    "seconds": 2,
+    "prompt": "A sparkling crystal bell chime arpeggio rising quickly, shimmering glassy tones with a magical glint.",
+    "event": "eat-golden"
+  },
+  {
+    "name": "grow-swell",
+    "seconds": 1,
+    "prompt": "A short warm rising swell like a deep breath through a soft reed, a gentle low whoosh swelling upward.",
+    "event": "grow"
+  },
+  {
+    "name": "rival-defeated-hit",
+    "seconds": 2,
+    "prompt": "A heavy cloth impact thump followed by a brief triumphant brass-like blare, punchy and decisive.",
+    "event": "rival-defeated"
+  },
+  {
+    "name": "death-thud",
+    "seconds": 2,
+    "prompt": "A low muffled body thud on soft earth followed by a slow descending weary slide tone, somber and final.",
+    "event": "death"
+  },
+  {
+    "name": "win-fanfare",
+    "seconds": 3,
+    "prompt": "A short bright victory fanfare of ascending bell-like notes ending on a sustained shining chime.",
+    "event": "win"
+  },
+  {
+    "name": "invalid-buzz",
+    "seconds": 1,
+    "prompt": "A short dull muted buzzer, soft and rounded like a rubber button pressed in error, not harsh.",
+    "event": "invalid"
+  },
+  {
+    "name": "countdown-tick",
+    "seconds": 1,
+    "prompt": "A single precise metronome tick, a clean mechanical click with a slight wooden resonance.",
+    "event": "countdown"
+  },
+  {
+    "name": "go-chime",
+    "seconds": 1,
+    "prompt": "A bright affirmative two-tone chime, like a small brass gong struck once, clear and encouraging.",
+    "event": "go"
+  },
+  {
+    "name": "undo-sweep",
+    "seconds": 1,
+    "prompt": "A quick airy reverse whoosh sweep, like a page being flipped backward, a soft rising hiss.",
+    "event": "undo"
+  },
+  {
+    "name": "ui-click",
+    "seconds": 1,
+    "prompt": "A very short clean UI click, like a small plastic switch toggled crisply, dry and precise.",
+    "event": "ui-click"
+  },
+  {
+    "name": "ui-back",
+    "seconds": 1,
+    "prompt": "A short soft descending blip, like a gentle wooden block tap pitched downward, a quiet back cue.",
+    "event": "ui-back"
+  },
+  {
+    "name": "pause-swell",
+    "seconds": 1,
+    "prompt": "A gentle muffled swell fading downward, like a soft curtain being drawn closed, calm and quiet.",
+    "event": "pause"
+  },
+  {
+    "name": "achievement-chime",
+    "seconds": 2,
+    "prompt": "A small celebratory badge chime, two bright metallic bell tones ringing with a light shimmer tail.",
+    "event": "achievement"
+  }
+]
