@@ -11,9 +11,48 @@
 // No secrets, no external services; state is in-memory per process.
 
 import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { extname, join, normalize, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runReplay, RULES_VERSION } from './js/rules.js';
 import { dailyConfig, toRulesConfig, CONTENT_VERSION } from './js/content.js';
 import { hashString } from './js/rng.js';
+
+const ROOT = fileURLToPath(new URL('.', import.meta.url));
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
+  '.wav': 'audio/wav',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/markdown; charset=utf-8',
+};
+
+// Serve a static asset from the game folder; falls back to index.html for '/'.
+async function serveStatic(res, pathname) {
+  let rel = decodeURIComponent(pathname);
+  if (rel === '/' || rel === '') rel = '/index.html';
+  const filePath = resolve(join(ROOT, normalize(rel)));
+  if (!filePath.startsWith(resolve(ROOT))) return json(res, 404, { error: 'not-found' });
+  try {
+    const data = await readFile(filePath);
+    res.writeHead(200, { 'content-type': MIME[extname(filePath).toLowerCase()] || 'application/octet-stream' });
+    res.end(data);
+  } catch {
+    json(res, 404, { error: 'not-found' });
+  }
+}
 
 const MAX_LOG_COMMANDS = 20000;
 const boards = new Map();      // boardId -> Map(playerId -> entry)
@@ -137,13 +176,13 @@ export function route(method, path) {
   return null;
 }
 
-// Standalone mode: node server.js [port]
+// Standalone mode: node server.js [port]  (PORT env also honored)
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const port = Number(process.argv[2]) || 8787;
+  const port = Number(process.argv[2]) || Number(process.env.PORT) || 8787;
   createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (!url.pathname.startsWith('/api/v1/')) {
-      return json(res, 404, { error: 'not-found' });
+      return serveStatic(res, url.pathname);
     }
     const found = route(req.method, url.pathname.slice('/api/v1'.length));
     if (!found) return json(res, 404, { error: 'not-found' });

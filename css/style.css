@@ -366,6 +366,10 @@ body.reduced-motion * { animation-duration: 0.01ms !important; transition-durati
   :root { --rail-w: 0px; }
   #hud-objective { font-size: 0.8rem; }
   .screen { padding-left: calc(0.7rem + var(--sal)); padding-right: calc(0.7rem + var(--sar)); }
+  /* Daily chip text is too long for one topbar row: give it a full row, no ellipsis clipping */
+  #topbar { flex-wrap: wrap; }
+  #topbar-center { flex: 1 1 100%; order: 3; }
+  .chip { max-width: 100%; min-width: 0; white-space: normal; overflow: visible; text-overflow: clip; }
 }
 
 /* Landscape mobile: narrow status rail preserved, big touch targets */
