@@ -8,6 +8,10 @@
     "test": "node tests/run-tests.mjs",
     "record-golden": "node tests/record-golden.mjs",
     "serve": "python3 -m http.server 8080",
-    "server": "node server.js 8787"
+    "server": "node server.js 8787",
+    "test:e2e": "node tests/e2e.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.62.1"
   }
 }

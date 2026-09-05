@@ -172,6 +172,13 @@ export class GameSession {
     for (let i = 0; i < steps; i++) snap = this._undoStack.pop();
     this.state = deserializeState(snap);
     this._accumulator = 0;
+    // Rewind the replay envelope so the recorded run still matches the restored
+    // state: drop commands/hashes stamped after the rewind point and subtract
+    // the duration of the ticks we stepped back over.
+    const stateTick = this.state.tick;
+    this.replay.commands = this.replay.commands.filter((c) => c.tick <= stateTick);
+    this.replay.hashes = this.replay.hashes.filter((h) => h.tick <= stateTick);
+    this.elapsedMs = Math.max(0, this.elapsedMs - steps * this.tickMs);
     this.onEvent({ type: 'undo' });
     return true;
   }

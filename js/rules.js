@@ -211,7 +211,7 @@ function rulesRngFresh(state) {
 export function getLegalActions(state) {
   if (state.status !== 'active') return [];
   const actions = [];
-  const effective = state.snake.queuedDir || state.snake.dir;
+  const effective = state.snake.dir;
   for (const name of DIR_NAMES) {
     const err = turnError(state, name, effective);
     if (!err) actions.push({ type: 'turn', dir: name, id: 'turn:' + name });
@@ -264,7 +264,7 @@ export function applyCommand(state, command) {
     return { state, events: [], error: { code: 'malformed', reason: 'Command is not an object.' } };
   }
   if (command.type === 'turn') {
-    const err = turnError(state, command.dir, state.snake.queuedDir || state.snake.dir);
+    const err = turnError(state, command.dir, state.snake.dir);
     if (err) {
       const next = cloneState(state);
       next.stats.invalidActions += 1;
@@ -384,7 +384,7 @@ export function advanceTick(prev) {
     }
     return terminate(state, events, 'won', 'objective-complete', target);
   }
-  if (state.config.moveLimit > 0 && state.tick >= state.config.moveLimit) {
+  if (state.config.moveLimit > 0 && state.stats.commands >= state.config.moveLimit) {
     return terminate(state, events, 'lost', 'moves-exhausted', target);
   }
   if (state.config.maxTicks > 0 && state.tick >= state.config.maxTicks) {

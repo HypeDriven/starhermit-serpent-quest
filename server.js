@@ -63,6 +63,20 @@ const ACHIEVEMENT_KEYS = new Set([
   'first-clear', 'mechanic-mastery', 'daily-streak-3', 'grand-milestone', 'seasoned-gardener',
 ]);
 
+// Spec §2 tie-break order: primary objective completion, fewer invalid actions,
+// lower authoritative elapsed time, then stable session identifier.
+function boardCompare(a, b) {
+  if (a.won !== b.won) return a.won ? -1 : 1;
+  if (a.score !== b.score) return b.score - a.score;
+  if ((a.invalidActions || 0) !== (b.invalidActions || 0)) {
+    return (a.invalidActions || 0) - (b.invalidActions || 0);
+  }
+  if ((a.durationMs || 0) !== (b.durationMs || 0)) {
+    return (a.durationMs || 0) - (b.durationMs || 0);
+  }
+  return String(a.sessionId || '').localeCompare(String(b.sessionId || ''));
+}
+
 function json(res, code, body) {
   res.writeHead(code, { 'content-type': 'application/json' });
   res.end(JSON.stringify(body));
@@ -112,7 +126,10 @@ export function validateScoreClaim(claim) {
       return { ok: false, error: 'score-mismatch', component: k, actual: actual[k] };
     }
   }
-  return { ok: true, score: actual, won: state.status === 'won', ticks: state.tick, finalHash };
+  return {
+    ok: true, score: actual, won: state.status === 'won', ticks: state.tick,
+    invalidActions: state.stats.invalidActions, finalHash,
+  };
 }
 
 export const handlers = {
@@ -127,10 +144,11 @@ export const handlers = {
     const board = boards.get(boardId);
     const entry = {
       playerId, score: verdict.score.total, won: verdict.won, ticks: verdict.ticks,
+      invalidActions: verdict.invalidActions, sessionId: claim.sessionId,
       durationMs: Math.min(claim.durationMs || 0, 3600000), at: Date.now(),
     };
     const prev = board.get(playerId);
-    if (!prev || entry.score > prev.score || (entry.score === prev.score && entry.won && !prev.won)) {
+    if (!prev || boardCompare(entry, prev) < 0) {
       board.set(playerId, entry);
     }
     return { status: 200, body: { accepted: true, casual: false, best: board.get(playerId) } };
@@ -138,7 +156,7 @@ export const handlers = {
 
   'GET /boards/:id': async (_req, _playerId, params) => {
     const board = boards.get(params.id);
-    const entries = board ? [...board.values()].sort((a, b) => b.score - a.score).slice(0, 50) : [];
+    const entries = board ? [...board.values()].sort(boardCompare).slice(0, 50) : [];
     return { status: 200, body: { entries, casual: false } };
   },
 

@@ -173,9 +173,30 @@ function stepCircling(state, n) {
   return s;
 }
 
-test('move limit ends the run', () => {
+// Like stepCircling but issues one command every tick, so the count of player
+// moves (state.stats.commands) equals the number of steps taken.
+function stepCirclingWithMoves(state, n) {
+  let s = state;
+  for (let i = 0; i < n && s.status === 'active'; i++) {
+    const head = s.snake.body[0];
+    const d = s.snake.dir;
+    const ahead = {
+      x: head.x + (d === 'right' ? 1 : d === 'left' ? -1 : 0),
+      y: head.y + (d === 'down' ? 1 : d === 'up' ? -1 : 0),
+    };
+    let cmd = d;
+    if (ahead.x < 1 || ahead.y < 1 || ahead.x >= s.grid.w - 1 || ahead.y >= s.grid.h - 1) {
+      cmd = { up: 'right', right: 'down', down: 'left', left: 'up' }[s.snake.dir];
+    }
+    s = turn(s, cmd);
+    s = step(s);
+  }
+  return s;
+}
+
+test('move limit ends the run after that many player moves', () => {
   let s = createGame(baseConfig({ moveLimit: 10, goals: [{ kind: 'food', count: 99 }] }));
-  s = stepCircling(s, 10);
+  s = stepCirclingWithMoves(s, 10);
   eq(s.terminalReason, 'moves-exhausted');
 });
 

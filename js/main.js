@@ -717,8 +717,10 @@ function unlockAchievement(key) {
 }
 
 async function submitDailyScore(results) {
+  const flow = currentFlow || {};
   const payload = {
     contentVersion: 1, rulesetId: results.rulesetId, seed: results.seed,
+    day: flow.descriptor?.day, sessionId: results.sessionId,
     settings: { tickScale: settings.timingAssist ? 1.25 : 1 },
     inputLog: results.replay.commands, score: results.score,
     checksum: results.replay.result.finalHash, durationMs: results.elapsedMs,
