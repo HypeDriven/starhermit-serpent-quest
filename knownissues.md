@@ -13,6 +13,65 @@ the real modules** to reproduce each one. Narrow, single-question prompts to the
 afterwards to double-check individual findings, and where that happened it is noted in the
 evidence.
 
+Review pass 2026-09-08: full-source review found and fixed five more defects (see
+*Resolved defects — 2026-09-08* below), confirmed by `npm test` (31/31), the browser e2e
+(desktop + mobile, `E2E PASS`, exit 0), and a targeted headless-Chrome smoke covering each fix.
+
+## Resolved defects — 2026-09-08
+
+### A. "Moves left" HUD counted ticks, not player moves — RESOLVED
+
+- **Fix:** `js/main.js` `updatePlayHud` now computes `moveLimit - state.stats.commands`, matching
+  the rules-side fix (original defect 5) that made the move limit count player moves. Previously
+  the HUD under-reported remaining moves whenever ticks passed without a turn.
+- **Verified:** headless-Chrome smoke — Counted Steps challenge shows `Moves left: 90` at tick 3
+  with zero moves made.
+
+### B. "Sound captions" setting was a dead toggle — RESOLVED
+
+- **Fix:** `js/ui.js` `caption()` now actually honors `settings.captions === false` (the old guard
+  had an empty body), and `js/storage.js` `DEFAULT_SETTINGS` gains `captions: true` so the default
+  (on) matches the documented behavior and the settings switch reflects it.
+- **Verified:** smoke — the captions switch defaults to checked, and toggling it off applies and
+  persists.
+
+### C. Passing a lesson showed a failure-styled results screen — RESOLVED
+
+- **Fix:** `js/main.js` — `onResolved` records `results.lessonPassed`; `showResults` shows
+  "Lesson complete!" (win styling, "Lesson target met — nicely done." for the early-finish
+  abandon) when the lesson target was met, and offers "Next lesson →" only when the lesson was
+  actually passed (previously offered even after failing, bypassing the lesson lock).
+- **Verified:** smoke — Lesson 1 completion shows "Lesson complete!" with Next lesson; steering
+  into the wall in Lesson 2 shows "The garden wins" with no Next lesson shortcut.
+
+### D. Resumed daily rounds lost their `day` and could never submit scores — RESOLVED
+
+- **Fix:** `js/main.js` — the pause snapshot now stores `descriptor.day`, and `resumeSnapshot`
+  rebuilds the full daily descriptor via `dailyConfig(day)` (so `submitDailyScore` passes the
+  server's `day` check and ghost comparisons use the real daily config instead of the placeholder
+  resume config).
+- **Verified:** code path inspection; snapshot round-trip fields exercised indirectly by the e2e
+  pause/resume flow.
+
+### E. Server score validation crashed on malformed `day` — RESOLVED
+
+- **Fix:** `server.js` `validateScoreClaim` validates the `day` format (`YYYY-MM-DD`) and date
+  validity before calling `dailyConfig`, which previously threw `RangeError: Invalid time value`
+  on input like `day: "garbage"`.
+- **Verified:** unit tests `server score validation rejects malformed days without throwing` and
+  `... reaches seed check for a real day` (new in `tests/run-tests.mjs`).
+
+Also added the root-instructed `LICENSE.md` (PolyForm Noncommercial 1.0.0), which was missing.
+
+### Test results (2026-09-08)
+
+| Check | Result |
+| --- | --- |
+| `npm test` | 31/31 pass |
+| `node --check` on all modules | clean |
+| `tests/e2e.mjs` (headless Chrome) | desktop + mobile, `E2E PASS`, exit 0 |
+| targeted headless-Chrome smoke | captions toggle, moves-left HUD, lesson pass/fail results — PASS |
+
 ## Test results
 
 | Check | Result |

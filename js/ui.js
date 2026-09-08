@@ -196,9 +196,8 @@ export function createUI({ onAction }) {
   }
 
   function caption(text) {
-    if (!currentSettings || currentSettings.captions === false) { /* captions default on for meaningful sounds only */ }
     const c = $('#caption');
-    if (!text) { c.hidden = true; return; }
+    if (!text || (currentSettings && currentSettings.captions === false)) { c.hidden = true; return; }
     c.textContent = text;
     c.hidden = false;
     clearTimeout(captionTimer);

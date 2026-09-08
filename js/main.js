@@ -594,6 +594,12 @@ function onPaused(reason) {
       rulesetId: currentFlow.descriptor.rulesetId || 'local-v1',
       themeId: currentFlow.descriptor.themeId || 'meadow',
       descriptorName: currentFlow.descriptor.name || '',
+      day: currentFlow.descriptor.day || null,
+      descriptor: currentFlow.descriptor,
+      initialConfig: session.initialConfig,
+      elapsedMs: session.elapsedMs,
+      lessonTracker,
+      tickScale: settings.timingAssist ? 1.25 : 1,
       state: session.getSnapshot(),
       replay: session.replay,
     }));
@@ -653,6 +659,7 @@ function onResolved(results) {
   if (flow.mode === 'learn' && lessonTracker) {
     const t = lessonTracker.tutorial;
     const passed = lessonPassed(lessonTracker, results);
+    results.lessonPassed = passed;
     if (passed) {
       progression.tutorials[t.id] = { done: true };
       telemetry('tutorial-step', { id: t.id, done: true });
@@ -736,13 +743,17 @@ async function submitDailyScore(results) {
 function showResults(results, extra = {}) {
   const flow = currentFlow || {};
   const won = results.won;
-  const headline = extra.isReplay ? 'Replay' : (won ? 'Garden cleared!' : 'The garden wins');
+  const lessonPassed = flow.mode === 'learn' && !!results.lessonPassed;
+  const displayWon = won || lessonPassed;
+  const headline = extra.isReplay ? 'Replay'
+    : lessonPassed ? 'Lesson complete!'
+    : (won ? 'Garden cleared!' : 'The garden wins');
   let nextAction = 'restart';
   let nextLabel = 'Play again';
   if (flow.mode === 'journey' && won) {
     const idx = JOURNEY_STAGES.findIndex((s) => s.id === flow.descriptor.id);
     if (idx >= 0 && idx + 1 < JOURNEY_STAGES.length) { nextAction = 'next-stage'; nextLabel = 'Next stage →'; }
-  } else if (flow.mode === 'learn') {
+  } else if (lessonPassed) {
     const idx = TUTORIALS.findIndex((t) => t.id === flow.tutorial.id);
     if (idx >= 0 && idx + 1 < TUTORIALS.length) { nextAction = 'next-lesson'; nextLabel = 'Next lesson →'; }
   }
@@ -751,9 +762,11 @@ function showResults(results, extra = {}) {
   ui.showScreen('results', {
     title: 'Results',
     autofocus: '1',
-    won,
+    won: displayWon,
     headline,
-    reasonText: extra.isReplay ? 'Watching the recorded round.' : (REASON_TEXT[results.reason] || ''),
+    reasonText: extra.isReplay ? 'Watching the recorded round.'
+      : lessonPassed && results.reason === 'abandoned' ? 'Lesson target met — nicely done.'
+      : (REASON_TEXT[results.reason] || ''),
     score: results.score,
     metaText: `${results.ticks} ticks · ${(results.elapsedMs / 1000).toFixed(1)}s · ${results.invalidActions} invalid move${results.invalidActions === 1 ? '' : 's'} · seed 0x${results.seed.toString(16)} · build ${BUILD_VERSION}`,
     achievements: (extra.newlyUnlocked || []).map((a) => `${a.name} — ${a.desc}`),
@@ -858,7 +871,7 @@ function updatePlayHud() {
     modeLabel: (MODE_LABELS[currentFlow.mode] || '') + (currentFlow.ranked ? '' : ' · unranked') + (currentFlow.descriptor.name ? ' — ' + currentFlow.descriptor.name : ''),
     goals,
     score: s.score.total,
-    movesLeft: s.config.moveLimit ? Math.max(0, s.config.moveLimit - s.tick) : null,
+    movesLeft: s.config.moveLimit ? Math.max(0, s.config.moveLimit - s.stats.commands) : null,
     timeLeft: s.config.maxTicks ? Math.max(0, Math.ceil((s.config.maxTicks - s.tick) * s.config.tickMs / 1000)) + 's' : null,
     canUndo: session.canUndo(),
     canHint: true,
@@ -1189,25 +1202,24 @@ function resumeSnapshot() {
   try {
     const data = JSON.parse(snap.state);
     stopAttract();
+    const tutorial = data.mode === 'learn' ? TUTORIALS.find(t => t.id === data.contentId) : null;
+    const descriptor = data.descriptor ||
+      (data.mode === 'daily' && data.day ? dailyConfig(new Date(data.day + 'T00:00:00Z')) : null) ||
+      stageById(data.contentId) || CHALLENGES.find(c => c.id === data.contentId) ||
+      (tutorial ? { id: tutorial.id, name: tutorial.name, seed: seedFromString(tutorial.id), themeId: 'meadow', mechanics: { allowUndo: false, rivalsEatFood: true }, ...tutorial.config } : null);
+    if (!descriptor && !data.initialConfig) throw new Error('Legacy snapshot has no reproducible configuration');
+    const config = data.initialConfig || toRulesConfig(descriptor);
     session = GameSession.fromSnapshot({
-      config: {
-        seed: data.state.seed, grid: data.state.grid,
-        start: { x: data.state.grid.w >> 1, y: data.state.grid.h >> 1, dir: 'up', length: 3 },
-        food: { count: 1, goldenChance: 0 }, rivals: [], obstacles: data.state.obstacles,
-        goals: [{ kind: 'score', count: 1 }], tickMs: data.state.config.tickMs,
-      },
+      config, tickScale: data.tickScale || 1,
       mode: data.mode, contentId: data.contentId, rulesetId: data.rulesetId,
       onEvent: onSessionEvent,
     }, JSON.stringify(data.state), data.replay);
-    currentFlow = {
-      mode: data.mode,
-      descriptor: {
-        id: data.contentId, name: data.descriptorName || MODE_LABELS[data.mode] || 'Round',
-        rulesetId: data.rulesetId, themeId: data.themeId || 'meadow',
-      },
-      config: session.initialConfig,
-      ranked: data.mode !== 'practice' && data.mode !== 'learn' && !settings.timingAssist,
-    };
+    session.elapsedMs = Number.isFinite(data.elapsedMs) ? data.elapsedMs : data.state.tick * session.tickMs;
+    currentFlow = { mode: data.mode, descriptor, config, tutorial,
+      ranked: data.mode !== 'practice' && data.mode !== 'learn' && (data.tickScale || 1) === 1 };
+    lessonTracker = tutorial ? { tutorial, actions: data.lessonTracker?.actions || 0,
+      events: data.lessonTracker?.events || 0, done: !!data.lessonTracker?.done } : null;
+    replaySource = null;
     renderer.setQuality(resolveQuality());
     renderer.loadArena(session.initialConfig, themeById(data.themeId || 'meadow'));
     ui.showScreen(null);

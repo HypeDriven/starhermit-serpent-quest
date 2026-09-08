@@ -41,7 +41,9 @@ const MIME = {
 
 // Serve a static asset from the game folder; falls back to index.html for '/'.
 async function serveStatic(res, pathname) {
-  let rel = decodeURIComponent(pathname);
+  let rel;
+  try { rel = decodeURIComponent(pathname); } catch { return json(res, 400, { error: 'bad-path' }); }
+  if (rel.split(/[\\/]/).some(p => p.startsWith('.') || ['data', 'node_modules'].includes(p))) return json(res, 403, { error: 'forbidden' });
   if (rel === '/' || rel === '') rel = '/index.html';
   const filePath = resolve(join(ROOT, normalize(rel)));
   if (!filePath.startsWith(resolve(ROOT))) return json(res, 404, { error: 'not-found' });
@@ -105,11 +107,15 @@ export function validateScoreClaim(claim) {
   if (!claim || typeof claim !== 'object') return { ok: false, error: 'malformed-claim' };
   if (claim.contentVersion !== CONTENT_VERSION) return { ok: false, error: 'stale-version' };
   if (claim.rulesetId !== 'daily-v1') return { ok: false, error: 'unsupported-ruleset' };
-  if (typeof claim.day !== 'string' || excludedDays.has(claim.day)) return { ok: false, error: 'day-excluded' };
+  if (typeof claim.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(claim.day) || excludedDays.has(claim.day)) {
+    return { ok: false, error: 'day-excluded' };
+  }
+  const dayDate = new Date(claim.day + 'T00:00:00Z');
+  if (Number.isNaN(dayDate.getTime()) || dayDate.toISOString().slice(0, 10) !== claim.day) return { ok: false, error: 'day-excluded' };
   if (!Array.isArray(claim.inputLog) || claim.inputLog.length > MAX_LOG_COMMANDS) {
     return { ok: false, error: 'bad-input-log' };
   }
-  const desc = dailyConfig(new Date(claim.day + 'T00:00:00Z'));
+  const desc = dailyConfig(dayDate);
   if (desc.seed !== claim.seed) return { ok: false, error: 'seed-mismatch' };
   if (claim.settings && claim.settings.tickScale && claim.settings.tickScale !== 1) {
     return { ok: false, error: 'assisted-settings' }; // timing assist is unranked

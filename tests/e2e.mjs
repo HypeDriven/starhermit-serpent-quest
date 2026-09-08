@@ -288,8 +288,15 @@ async function runPauseHint(page, name) {
   await page.screenshot({ path: SHOT('hint', name) });
   console.log(`ok - [${name}] pause (❚❚) → HUD ok ("${hudObj.trim()}") + Hint (H) pressed`);
   await page.evaluate(() => { if (window.__sq?.renderer) window.__sq.renderer.setHidden(true); });
-  await page.locator('#pause-overlay button', { hasText: 'Resume' }).click();
-  await page.waitForFunction(() => !document.getElementById('pause-overlay')?.classList.contains('active'));
+  const originalConfig = await page.evaluate(() => JSON.stringify(window.__sq.session.initialConfig));
+  await page.reload();
+  await page.getByRole('button', { name: 'Resume round', exact: true }).click();
+  await page.waitForFunction(() => !!window.__sq?.session);
+  const restoredConfig = await page.evaluate(() => JSON.stringify(window.__sq.session.initialConfig));
+  if (restoredConfig !== originalConfig) throw new Error('snapshot lost original round configuration');
+  await installBot(page);
+  await page.evaluate(() => window.__sq.renderer.setHidden(true));
+  await page.waitForFunction(() => window.__sq.session.phase === 'active');
   await page.waitForTimeout(200); // let it re-engage, then the controller continues
   console.log(`ok - [${name}] pause → Resume works`);
 }

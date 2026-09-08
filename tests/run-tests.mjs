@@ -8,6 +8,7 @@ import {
   validateAllContent, toRulesConfig, PRACTICE_DIFFICULTIES, contentHash,
 } from '../js/content.js';
 import { hashString, seedFromString } from '../js/rng.js';
+import { validateScoreClaim } from '../server.js';
 
 let passed = 0, failed = 0;
 const failures = [];
@@ -331,6 +332,24 @@ test('daily config is stable per UTC day and differs across days', () => {
   eq(d1.seed, d2.seed, 'same UTC day, same seed');
   ok(d1.seed !== d3.seed, 'next day differs');
   eq(d1.day, '2026-06-10');
+});
+
+test('server score validation rejects malformed days without throwing', () => {
+  for (const day of ['garbage', '2026-13-99', '2026/01/01', '', 42, null]) {
+    const r = validateScoreClaim({
+      contentVersion: 1, rulesetId: 'daily-v1', day, seed: 1, inputLog: [],
+    });
+    ok(!r.ok, 'rejected: ' + JSON.stringify(day));
+    eq(r.error, 'day-excluded');
+  }
+});
+
+test('server score validation reaches seed check for a real day', () => {
+  const day = '2026-01-05';
+  const r = validateScoreClaim({
+    contentVersion: 1, rulesetId: 'daily-v1', day, seed: 1, inputLog: [],
+  });
+  eq(r.error, 'seed-mismatch'); // valid day, wrong seed
 });
 
 test('journey stages instantiate and simulate without errors', () => {

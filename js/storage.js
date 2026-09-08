@@ -46,6 +46,7 @@ export const DEFAULT_SETTINGS = {
   holdToPause: false,
   timingAssist: false, // slows tick rate one notch, unranked
   haptics: true,
+  captions: true, // text cues for meaningful sounds (death, win, etc.)
   cameraView: 'default', // default | top
   bindings: {
     up: ['ArrowUp', 'KeyW'], down: ['ArrowDown', 'KeyS'],
