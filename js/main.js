@@ -14,6 +14,7 @@ import {
   loadSettings, saveSettings, loadProfile, saveProfile,
   loadProgression, saveProgression, loadBoards, saveBoards,
   saveSnapshot, loadSnapshot, clearSnapshot, compareResults,
+  mergeProgression,
 } from './storage.js';
 import { GameSession, BUILD_VERSION } from './session.js';
 import { createRenderer } from './render.js';
@@ -121,6 +122,8 @@ async function boot() {
   platform.syncTime();
   platform.activityStart();
   window.addEventListener('beforeunload', () => platform.activityEnd());
+  window.addEventListener('pagehide', () => platform.cloudSync.flush());
+  initHostedState();
 
   ui.setLoading(90, 'Almost there…');
   await nextFrame();
@@ -144,6 +147,61 @@ function nextFrame() { return new Promise((r) => requestAnimationFrame(() => req
 
 function telemetry(event, data) {
   platform.telemetry(event, data, settings.telemetryConsent);
+}
+
+// ---------------------------------------------------------------------------
+// Hosted state: cloud save mirror + account display name
+// ---------------------------------------------------------------------------
+
+// Remote-preferred load: the platform slot wins on conflict; localStorage
+// remains the offline cache either way.
+async function initHostedState() {
+  if (!platform.hosted) return;
+  platform.cloudSync.onStatus(() => {
+    if (ui.activeScreen === 'profile') showProfile();
+  });
+  try {
+    const remote = await platform.cloudSync.load();
+    if (remote && (remote.progression || remote.boards)) {
+      if (remote.progression) {
+        const m = mergeProgression(progression, remote.progression);
+        progression = m.conflict ? remote.progression : m.merged;
+      }
+      if (remote.boards && typeof remote.boards === 'object') {
+        boards = { daily: {}, chase: [], challenges: {}, ...remote.boards };
+      }
+      saveProgression(progression);
+      saveBoards(boards);
+    }
+  } catch { /* local cache stays authoritative */ }
+  // Nickname from the account profile (never /me, never usernames); rendered
+  // in the topbar, title, and boards via profile.displayName.
+  platform.fetchProfileName().then((name) => {
+    if (!name) return;
+    profile.displayName = name;
+    profile.isGuest = false;
+    saveProfile(profile);
+    ui.updateTopbar(topbarVM());
+    if (ui.activeScreen === 'title') goTitle();
+  }).catch(() => {});
+}
+
+// Cloud mirror of the local save doc: debounced by the adapter, flushed on
+// pagehide. No-op offline — localStorage is the cache there.
+function syncCloudSave() {
+  if (!platform.hosted) return;
+  platform.cloudSync.schedule({ version: 1, savedAt: Date.now(), progression, boards });
+}
+
+function syncStatusText() {
+  const labels = {
+    idle: 'Cloud save: ready',
+    saving: 'Cloud save: saving…',
+    synced: 'Cloud save: synced',
+    error: 'Cloud save: offline — will retry',
+    offline: 'Cloud save: offline',
+  };
+  return labels[platform.cloudSync.status] || '';
 }
 
 // ---------------------------------------------------------------------------
@@ -262,8 +320,10 @@ function showProfile() {
   ui.showScreen('profile', {
     title: 'Profile',
     profile,
+    readOnly: platform.hosted,
+    syncText: platform.hosted ? syncStatusText() : '',
     accountText: platform.hosted
-      ? 'Signed in through the host. Progress syncs to your account.'
+      ? 'Signed in through the host. Your garden name comes from your account profile.'
       : 'Playing as a local guest. Progress is stored on this device; sign in through the host for durable cloud progress.',
   });
 }
@@ -366,10 +426,15 @@ async function showBoards() {
   ];
 
   if (platform.hosted) {
-    try {
-      const friends = await platform.fetchFriends();
-      boardsVM.push({ name: 'Friends', entries: friends, casual: false });
-    } catch { boardsVM.push({ name: 'Friends', entries: [], casual: true }); }
+    // Platform boards are read-only: one global list plus a friends-filtered
+    // view, nicknames resolved through the profile helper.
+    const [global, friends] = await Promise.all([
+      platform.fetchLeaderboard(false),
+      platform.fetchLeaderboard(true),
+    ]);
+    if (global) boardsVM.push({ name: 'Global', entries: global.slice(0, 10), casual: false });
+    if (friends) boardsVM.push({ name: 'Friends', entries: friends.slice(0, 10), casual: false });
+    if (!global && !friends) boardsVM.push({ name: 'Friends', entries: [], casual: true });
   } else {
     boardsVM.push({ name: 'Friends', entries: [], casual: true });
   }
@@ -703,6 +768,7 @@ function onResolved(results) {
 
   saveProgression(progression);
   saveBoards(boards);
+  syncCloudSave();
   clearSnapshot();
   telemetry('round-end', { mode: flow.mode, won: results.won, score: results.score.total });
 
@@ -724,6 +790,7 @@ function unlockAchievement(key) {
 }
 
 async function submitDailyScore(results) {
+  if (platform.hosted) return; // platform boards are script-owned/read-only; the daily best is a cloud-synced personal record
   const flow = currentFlow || {};
   const payload = {
     contentVersion: 1, rulesetId: results.rulesetId, seed: results.seed,
@@ -1133,9 +1200,11 @@ function onAction(name, payload = {}) {
       break;
     }
     case 'profile-save':
-      profile.displayName = String(payload.profile.displayName || 'Guest Gardener').slice(0, 24) || 'Guest Gardener';
-      saveProfile(profile);
-      ui.updateTopbar(topbarVM());
+      if (!platform.hosted) {
+        profile.displayName = String(payload.profile.displayName || 'Guest Gardener').slice(0, 24) || 'Guest Gardener';
+        saveProfile(profile);
+        ui.updateTopbar(topbarVM());
+      }
       goBack();
       break;
     case 'equip-cosmetic': {
@@ -1147,12 +1216,13 @@ function onAction(name, payload = {}) {
       }
       progression.cosmetics.equipped.trail = c.id;
       saveProgression(progression);
+      syncCloudSave();
       showProgression();
       break;
     }
     case 'resume-snapshot': resumeSnapshot(); break;
     case 'discard-snapshot': clearSnapshot(); goTitle(); break;
-    case 'replay-tutorials': progression.tutorials = {}; saveProgression(progression); navigate('learn'); showLearn(); break;
+    case 'replay-tutorials': progression.tutorials = {}; saveProgression(progression); syncCloudSave(); navigate('learn'); showLearn(); break;
   }
 }
 
@@ -1161,7 +1231,9 @@ function dailyPlay() {
   showSetup({
     mode: 'daily', descriptor: desc,
     title: 'Daily Garden — ' + desc.day,
-    subtitle: 'One shared seed for everyone today. Ranked.',
+    subtitle: platform.hosted
+      ? 'One shared seed for everyone today. Personal best syncs to your account.'
+      : 'One shared seed for everyone today. Ranked.',
   });
 }
 

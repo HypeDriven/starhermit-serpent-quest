@@ -30,11 +30,10 @@
  *
  * Serving: the repo ships `server.js` (the StarHermit authoritative script
  * declared by starhermit.txt) and the game is fully playable offline — with
- * no launch_token the platform adapter sets `hosted=false` and never issues
- * an /api/* request, so every screen works locally. Per the sibling
- * conventions this test embeds a minimal node:http static server on an
- * ephemeral port and answers /api/* probes with 200 `{}` so the client
- * degrades to its documented offline path with zero console noise.
+ * no launch token the platform adapter sets `hosted=false`; on 127.0.0.1 it
+ * probes the localhost dev-server routes (/time, /activity/*), which this
+ * mock answers with 200 `{}` so the client degrades to its documented
+ * offline path with zero console noise.
  *
  * Run: npm run test:e2e  (or: node tests/e2e.mjs)
  */

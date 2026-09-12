@@ -537,14 +537,27 @@ export function createUI({ onAction }) {
     profile(inner, vm) {
       inner.append(el('h1', { text: 'Profile' }));
       const p = { ...vm.profile };
-      inner.append(el('div', { class: 'card' },
-        el('div', { class: 'field' },
-          el('label', { for: 'prof-name', text: 'Display name' }),
-          el('input', { type: 'text', id: 'prof-name', value: p.displayName, maxlength: 24, oninput: (e) => { p.displayName = e.target.value; } })),
-        el('p', { class: 'muted', text: vm.accountText }),
-        el('div', { class: 'btn-row' },
-          el('button', { class: 'btn primary', type: 'button', onclick: () => onAction('profile-save', { profile: p }) }, 'Save'))));
-      inner.append(backRow());
+      const card = el('div', { class: 'card' });
+      if (vm.readOnly) {
+        // Hosted: the display name is the account nickname (read-only here).
+        card.append(
+          el('div', { class: 'field' },
+            el('label', { text: 'Display name' }),
+            el('p', { text: p.displayName })),
+          el('p', { class: 'muted', text: vm.accountText }),
+        );
+      } else {
+        card.append(
+          el('div', { class: 'field' },
+            el('label', { for: 'prof-name', text: 'Display name' }),
+            el('input', { type: 'text', id: 'prof-name', value: p.displayName, maxlength: 24, oninput: (e) => { p.displayName = e.target.value; } })),
+          el('p', { class: 'muted', text: vm.accountText }),
+          el('div', { class: 'btn-row' },
+            el('button', { class: 'btn primary', type: 'button', onclick: () => onAction('profile-save', { profile: p }) }, 'Save')),
+        );
+      }
+      if (vm.syncText) card.append(el('p', { class: 'muted', text: vm.syncText }));
+      inner.append(card, backRow());
     },
 
     boards(inner, vm) {
@@ -555,12 +568,14 @@ export function createUI({ onAction }) {
         listWrap.innerHTML = '';
         if (board.casual) listWrap.append(el('p', { class: 'muted', text: 'Casual board — offline scores are not server-validated.' }));
         if (!board.entries.length) listWrap.append(el('p', { class: 'muted', text: 'No scores yet. Be the first!' }));
-        listWrap.append(el('div', { class: 'board-list' }, board.entries.map((e, i) =>
-          el('div', { class: 'board-row' + (e.me ? ' me' : '') },
+        listWrap.append(el('div', { class: 'board-list' }, board.entries.map((e, i) => {
+          const meta = [e.ruleset, e.seed != null ? 'seed ' + e.seed : null].filter(Boolean).join(' · ');
+          return el('div', { class: 'board-row' + (e.me ? ' me' : '') },
             el('span', { text: '#' + (i + 1) }),
-            el('span', {}, e.name, el('span', { class: 'muted', text: ` · ${e.ruleset} · seed ${e.seed}` })),
+            el('span', {}, e.name, meta ? el('span', { class: 'muted', text: ' · ' + meta }) : null),
             el('span', { text: String(e.score) }),
-            el('span', { class: 'muted', text: e.when })))));
+            el('span', { class: 'muted', text: e.when || '' }));
+        })));
       };
       vm.boards.forEach((b, i) => {
         tabs.append(el('button', {
