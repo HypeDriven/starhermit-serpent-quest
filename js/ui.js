@@ -43,7 +43,16 @@ export function createUI({ onAction }) {
   // Screen manager with focus restoration
   // -------------------------------------------------------------------------
 
+  const topbar = document.getElementById('topbar');
+  const syncTopbarInset = () => {
+    const h = topbar && !topbar.hidden ? topbar.getBoundingClientRect().height : 0;
+    screensRoot.style.setProperty('--topbar-h', `${Math.round(h)}px`);
+  };
+  if (topbar && typeof ResizeObserver === 'function') new ResizeObserver(syncTopbarInset).observe(topbar);
+  window.addEventListener('resize', syncTopbarInset);
+
   function showScreen(name, vm = {}) {
+    syncTopbarInset();
     screensRoot.innerHTML = '';
     activeScreen = name;
     if (!name) {
@@ -431,6 +440,15 @@ export function createUI({ onAction }) {
           el('span', { class: 'tag', text: vm.durationText }),
           vm.assistsText ? el('span', { class: 'tag', text: vm.assistsText }) : null));
       inner.append(facts);
+      if (vm.controls) {
+        const card = el('div', { class: 'card' }, el('h2', { text: 'How to steer' }),
+          el('ul', {}, vm.controls.map((f) => el('li', { text: f }))));
+        if (vm.suggestLearn) {
+          card.append(el('p', { class: 'muted' }, 'First time? ',
+            el('button', { class: 'btn small', type: 'button', onclick: () => onAction('mode-learn') }, 'Try the Learn lessons')));
+        }
+        inner.append(card);
+      }
       if (vm.options) {
         const card = el('div', { class: 'card' }, el('h2', { text: 'Options' }));
         for (const opt of vm.options) {

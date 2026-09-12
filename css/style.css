@@ -174,10 +174,12 @@ p, li, td { max-width: 70ch; }
 .dpad [data-dir="down"] { grid-area: 3 / 2; }
 
 /* --- Screens --- */
-#screens { position: fixed; inset: 0; z-index: 30; pointer-events: none; }
+/* Screens start below the persistent topbar (its measured height is kept in
+   --topbar-h by a ResizeObserver) so headings never hide behind it. */
+#screens { position: fixed; inset: 0; z-index: 30; pointer-events: none; --topbar-h: 0px; }
 .screen {
-  position: absolute; inset: 0; overflow-y: auto;
-  padding: calc(1rem + var(--sat)) calc(1rem + var(--sar)) calc(1rem + var(--sab)) calc(1rem + var(--sal));
+  position: absolute; inset: 0; overflow-y: auto; scroll-padding-top: 1rem;
+  padding: calc(1rem + max(var(--topbar-h), var(--sat))) calc(1rem + var(--sar)) calc(1rem + var(--sab)) calc(1rem + var(--sal));
   display: none; pointer-events: auto;
   background: color-mix(in srgb, var(--bg) 82%, transparent);
   backdrop-filter: blur(10px);

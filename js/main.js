@@ -515,7 +515,24 @@ function showSetup(flow) {
     durationText: durationText(desc),
     assistsText: settings.timingAssist ? 'Timing assist on' : (desc.mechanics?.allowUndo ? 'Undo allowed' : null),
     options: options.length ? options : null,
+    controls: flow.mode === 'learn' ? null : steeringHints(),
+    suggestLearn: flow.mode !== 'learn' && !Object.values(progression.tutorials || {}).some((t) => t?.done)
+      && !Object.values(progression.stages || {}).some((st) => st?.attempts),
   });
+}
+
+/** Short onboarding lines shown on every setup screen before the countdown. */
+function steeringHints() {
+  const coarse = matchMedia('(pointer: coarse)').matches;
+  const b = settings.bindings || {};
+  const keys = (a) => (b[a] || []).map((k) => k.replace('Arrow', '')).join('/');
+  return [
+    coarse
+      ? 'Steer with the on-screen pad, a swipe, or by tapping a tile.'
+      : `Steer with ${keys('up') || 'W'} ${keys('left') || 'A'} ${keys('down') || 'S'} ${keys('right') || 'D'}, or click a tile.`,
+    'The serpent never stops — it keeps sliding forward until you turn it.',
+    'Hitting a hedge wall, your own tail or a rival ends the round.',
+  ];
 }
 
 // ---------------------------------------------------------------------------

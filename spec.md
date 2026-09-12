@@ -81,7 +81,7 @@ The Three.js canvas fills the game region but is never the only UI. Menus, text,
 ### Screens and overlays
 
 - **Title/home:** Play is dominant; daily challenge, journey progress, and profile are one level below.
-- **Mode setup:** show rules, expected duration, player count, assists, and whether the result is ranked before commitment.
+- **Mode setup:** show rules, expected duration, player count, assists, and whether the result is ranked before commitment, plus a "How to steer" card (input method, continuous motion, lethal walls) with a Learn shortcut for players with no lessons or attempts yet. Overlay screens start below the measured topbar so headings are never hidden behind it.
 - **Play HUD:** objective, progress, current actor/state, pause, and only context-relevant actions.
 - **Pause/settings:** resume first; audio, graphics, controls, accessibility, help, and leave are clearly separated.
 - **Results:** outcome headline, score breakdown, progress, achievements, comparison, replay/retry, and next recommended action.
