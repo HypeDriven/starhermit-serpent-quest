@@ -18,6 +18,7 @@ import {
 } from './storage.js';
 import { GameSession, BUILD_VERSION } from './session.js';
 import { createRenderer } from './render.js';
+import { normalizePreset } from './gfx.js';
 import { createAudio } from './audio.js';
 import { createUI } from './ui.js';
 import { createPlatform } from './platform.js';
@@ -114,6 +115,9 @@ async function boot() {
       ui.toast('Garden restored.');
     },
   });
+  ui.setGraphicsInfo(() => renderer.graphicsInfo());
+  renderer.onGraphicsChange = () => ui.refreshGraphics();
+  applyGraphics();
   audio = createAudio({ getSettings: () => settings });
 
   ui.setLoading(70, 'Opening the gates…');
@@ -208,12 +212,17 @@ function syncStatusText() {
 // Quality + theme helpers
 // ---------------------------------------------------------------------------
 
-function resolveQuality() {
-  if (settings.quality !== 'auto') return settings.quality;
-  const coarse = matchMedia('(pointer: coarse)').matches;
-  const small = Math.min(screen.width, screen.height) < 760;
-  const lowMem = navigator.deviceMemory && navigator.deviceMemory < 4;
-  return (coarse && (small || lowMem)) ? 'low' : (coarse || small ? 'medium' : 'high');
+// Graphics settings: `settings.quality` holds the preset (auto | low |
+// balanced | high | ultra); `settings.graphics` holds render scale, adaptive,
+// frame-rate readout and per-category overrides (see js/gfx.js).
+function graphicsSaved() {
+  settings.quality = normalizePreset(settings.quality);
+  if (!settings.graphics || typeof settings.graphics !== 'object') settings.graphics = {};
+  return { ...settings.graphics, preset: settings.quality };
+}
+
+function applyGraphics() {
+  if (renderer) renderer.setGraphics(graphicsSaved());
 }
 
 function themedFor(descriptor) {
@@ -559,7 +568,7 @@ function startRound(flow) {
     onEvent: onSessionEvent,
   });
 
-  renderer.setQuality(resolveQuality());
+  applyGraphics();
   renderer.loadArena(config, themedFor(desc));
   renderer.prewarm();
   ui.showScreen(null);
@@ -593,7 +602,7 @@ function startAttract() {
   const config = toRulesConfig(desc);
   attract = { session: null, config, rng: createRng((Math.random() * 1e9) >>> 0) };
   attract.session = new GameSession({ config, mode: 'attract', contentId: 'attract', onEvent: () => {} });
-  renderer.setQuality(resolveQuality());
+  applyGraphics();
   renderer.loadArena(config, themeById(desc.themeId));
   attract.session.start(0.5);
 }
@@ -1203,7 +1212,7 @@ function onAction(name, payload = {}) {
       saveSettings(settings);
       ui.applySettings(settings);
       audio.applySettings();
-      renderer.setQuality(resolveQuality());
+      applyGraphics();
       telemetry('settings-change', {});
       break;
     }
@@ -1309,7 +1318,7 @@ function resumeSnapshot() {
     lessonTracker = tutorial ? { tutorial, actions: data.lessonTracker?.actions || 0,
       events: data.lessonTracker?.events || 0, done: !!data.lessonTracker?.done } : null;
     replaySource = null;
-    renderer.setQuality(resolveQuality());
+    applyGraphics();
     renderer.loadArena(session.initialConfig, themeById(data.themeId || 'meadow'));
     ui.showScreen(null);
     ui.setHudVisible(true);
@@ -1330,6 +1339,7 @@ window.__sq = {
   get session() { return session; },
   get settings() { return settings; },
   get renderer() { return renderer; },
+  applyGraphics,
 };
 
 boot();

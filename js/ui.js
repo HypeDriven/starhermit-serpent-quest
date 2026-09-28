@@ -4,6 +4,8 @@
 // Knows nothing about rules internals; speaks in view models + onAction events.
 
 import { THEMES } from './content.js';
+import { PRESETS, CATEGORIES, presetTier, describe, choosePreset, normalizePreset } from './gfx.js';
+import { gfxStrings, fmt } from './gfx-strings.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -38,6 +40,8 @@ export function createUI({ onAction }) {
   let toastTimer = 0;
   let captionTimer = 0;
   let currentSettings = null;
+  let graphicsInfo = () => null;  // provided by main (renderer.graphicsInfo)
+  let refreshGraphicsCard = null; // set while the Settings screen is open
 
   // -------------------------------------------------------------------------
   // Screen manager with focus restoration
@@ -251,6 +255,112 @@ export function createUI({ onAction }) {
   }
 
   // -------------------------------------------------------------------------
+  // Graphics section: preset, render scale, per-effect overrides, adaptive
+  // resolution, frame-rate readout, GPU/cost summary. Localized via
+  // gfx-strings.js (browser language). Rebuilt in place on every change so
+  // the "From preset (…)" labels follow the chosen preset.
+  // -------------------------------------------------------------------------
+
+  function graphicsCard(s, emit) {
+    const L = gfxStrings(typeof navigator !== 'undefined' ? navigator.language : 'en-US');
+    const card = el('div', { class: 'card gfx-card', id: 'gfx-card', role: 'group', 'aria-labelledby': 'gfx-title' });
+
+    const render = () => {
+      const focusId = document.activeElement && card.contains(document.activeElement) ? document.activeElement.id : null;
+      s.quality = normalizePreset(s.quality);
+      if (!s.graphics || typeof s.graphics !== 'object') s.graphics = {};
+      const g = s.graphics;
+      const info = graphicsInfo();
+      const detected = info ? info.detected : 'balanced';
+      const effective = s.quality === 'auto' ? detected : s.quality;
+      const tierName = (t) => L.tier[t] || t;
+      const changed = () => { emit(); render(); };
+
+      card.innerHTML = '';
+      card.append(el('h2', { id: 'gfx-title', text: L.title }));
+
+      // Quality preset (choosing one clears overrides).
+      const presetSel = el('select', {
+        id: 'set-gfx-preset', 'data-gfx': 'preset',
+        onchange: (e) => {
+          const v = e.target.value;
+          const next = choosePreset(g, v);
+          delete next.preset;
+          s.graphics = next;
+          s.quality = v;
+          changed();
+        },
+      }, [['auto', fmt(L.auto, { tier: tierName(detected) })], ...PRESETS.map((p) => [p, tierName(p)])].map(([v, l]) => {
+        const o = el('option', { value: v, text: l });
+        if (s.quality === v) o.selected = true;
+        return o;
+      }));
+      card.append(el('div', { class: 'field' }, el('label', { for: 'set-gfx-preset', text: L.quality }), presetSel));
+
+      // Render scale 50–200 %.
+      const pct = Math.round((Number(g.render_scale) || 1) * 100);
+      const out = el('output', { id: 'gfx-scale-value', for: 'set-gfx-scale', text: pct + '%' });
+      card.append(el('div', { class: 'field' },
+        el('div', { class: 'gfx-scale-row' }, el('label', { for: 'set-gfx-scale', text: L.renderScale }), out),
+        el('input', {
+          type: 'range', id: 'set-gfx-scale', 'data-gfx': 'render_scale', min: 50, max: 200, step: 5, value: pct,
+          'aria-valuetext': pct + '%',
+          oninput: (e) => { out.textContent = e.target.value + '%'; e.target.setAttribute('aria-valuetext', e.target.value + '%'); },
+          onchange: (e) => { g.render_scale = Number(e.target.value) / 100; changed(); },
+        })));
+
+      // One select per category.
+      const grid = el('div', { class: 'gfx-grid' });
+      for (const [cat, tiers] of Object.entries(CATEGORIES)) {
+        const sel = el('select', {
+          id: 'set-gfx-' + cat, 'data-gfx-cat': cat,
+          onchange: (e) => {
+            if (e.target.value === 'preset') delete g[cat]; else g[cat] = e.target.value;
+            changed();
+          },
+        }, [['preset', fmt(L.fromPreset, { tier: tierName(presetTier(effective, cat)) })], ...tiers.map((t) => [t, tierName(t)])].map(([v, l]) => {
+          const o = el('option', { value: v, text: l });
+          if ((g[cat] || 'preset') === v) o.selected = true;
+          return o;
+        }));
+        grid.append(el('div', { class: 'field' }, el('label', { for: 'set-gfx-' + cat, text: L.cat[cat] }), sel));
+      }
+      card.append(grid);
+
+      const toggle = (id, key, label, hint, value) => el('div', { class: 'switch-row' },
+        el('div', {}, el('label', { for: id, text: label }), hint ? el('p', { class: 'hint', text: hint }) : null),
+        el('input', {
+          type: 'checkbox', class: 'switch', id, 'data-gfx': key, checked: value,
+          onchange: (e) => { g[key] = e.target.checked; changed(); },
+        }));
+      card.append(
+        toggle('set-gfx-adaptive', 'adaptive', L.adaptive, L.adaptiveHint, g.adaptive !== false),
+        toggle('set-gfx-fps', 'show_fps', L.showFps, null, !!g.show_fps));
+
+      card.append(el('div', { class: 'field' },
+        el('label', { for: 'set-cameraView', text: L.camera }),
+        el('select', { id: 'set-cameraView', onchange: (e) => { s.cameraView = e.target.value; emit(); } },
+          [['default', L.cameraDefault], ['top', L.cameraTop]].map(([v, l]) => {
+            const o = el('option', { value: v, text: l });
+            if (s.cameraView === v) o.selected = true;
+            return o;
+          }))));
+
+      const summary = info
+        ? `${info.gpu || L.sum.gpu} · ${describe(info.resolved, info.pixels, L.sum)}`
+        : '';
+      card.append(el('p', { class: 'hint gfx-summary', id: 'gfx-summary', 'data-gfx-preset': info ? info.resolved.preset : '', text: summary }));
+      if (info && info.postFailed) card.append(el('p', { class: 'hint gfx-warn', id: 'gfx-post-note', role: 'status', text: L.postFailed }));
+      card.append(el('p', { class: 'hint', text: L.note }));
+
+      if (focusId) { const f = card.querySelector('#' + CSS.escape(focusId)); if (f) f.focus({ preventScroll: true }); }
+    };
+    render();
+    refreshGraphicsCard = () => { if (card.isConnected) render(); else refreshGraphicsCard = null; };
+    return card;
+  }
+
+  // -------------------------------------------------------------------------
   // Settings application (CSS-level) + form
   // -------------------------------------------------------------------------
 
@@ -300,11 +410,7 @@ export function createUI({ onAction }) {
       el('div', { class: 'card' }, el('h2', { text: 'Audio' }),
         slider('music', 'Music'), slider('sfx', 'Effects'), slider('ambience', 'Ambience'), slider('voice', 'Voice cues'),
         toggle('muted', 'Mute all audio')),
-      el('div', { class: 'card' }, el('h2', { text: 'Graphics' }),
-        select('quality', 'Quality tier', [['auto', 'Auto'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']],
-          'Tiers change effects only — never the rules or hazard visibility.'),
-        select('cameraView', 'Camera', [['default', 'Angled (default)'], ['top', 'Top-down']]),
-      ),
+      graphicsCard(s, emit),
       el('div', { class: 'card' }, el('h2', { text: 'Accessibility' }),
         toggle('reducedMotion', 'Reduced motion', 'Removes camera swoops, shake, and rapid particles.'),
         toggle('highContrast', 'High contrast'),
@@ -657,6 +763,8 @@ export function createUI({ onAction }) {
     announce, toast, caption, countdown,
     showPause, applySettings, mirror, updateTopbar,
     wireStatic,
+    setGraphicsInfo(fn) { graphicsInfo = fn || (() => null); },
+    refreshGraphics() { if (refreshGraphicsCard) refreshGraphicsCard(); },
     setLoading(progress, label) {
       $('#loading-bar').value = progress;
       if (label) $('#loading-label').textContent = label;

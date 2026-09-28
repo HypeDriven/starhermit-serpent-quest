@@ -37,7 +37,8 @@ function unwrap(raw) {
 export const DEFAULT_SETTINGS = {
   version: 1,
   music: 0.7, sfx: 0.9, ambience: 0.5, voice: 0.8, muted: false,
-  quality: 'auto', // auto | low | medium | high
+  quality: 'auto', // graphics preset: auto | low | balanced | high | ultra (old 'medium' → balanced)
+  graphics: {}, // render_scale, adaptive, show_fps and per-category overrides (js/gfx.js)
   reducedMotion: false,
   highContrast: false,
   colorPalette: 'standard', // standard | deuteranopia | protanopia | tritanopia

@@ -144,6 +144,12 @@ During implementation, begin with `threejs-skill-router` and load only the follo
 
 Follow the skill pack's acceptance gate: deterministic seeds, debug views for controlling fields, perceptually grouped parameters, mechanism-backed quality tiers, and a readable no-post baseline. Do not add an effect merely because a skill exists.
 
+### Graphics
+
+Lighting uses ACES filmic tone mapping with sRGB output, one warm key sun with PCF soft shadows whose shadow frustum is fitted in light space around the arena and its hedge wall, and a hemisphere sky/ground fill; each theme sets the sky, fog, sun colour and strength. With reflections on, a PMREM-filtered `RoomEnvironment` is the scene environment (kept deliberately faint per material so pieces never wash out) and the hemisphere fill eases off. Surface detail adds procedural, tileable canvas textures: mottled soil with speckle and bump on the arena and apron, clumpy leaf texture and bump on hedges, a scale-pattern bump on serpent bodies, clear-coated glossy serpents, eyes and berries, and slightly metallic golden food whose emissive shimmer feeds bloom. Optional post-processing (built only when an effect needs it, in the order RenderPass → GTAO → UnrealBloom (threshold 0.92, so only golden food, particles and glints glow) → colour grade → OutputPass → SMAA/FXAA) adds contact ambient occlusion, bloom, and a gentle S-curve grade with a touch of saturation, warm highlights / cool shadows and a soft vignette. Particle bursts use a soft round sprite, and at high particle quality a field of pollen motes drifts over the arena (frozen with pause, hidden with reduced motion — the game setting or the OS preference). Addons are the three r160 files vendored under `vendor/addons/` and loaded lazily through the page importmap, so Low never fetches them.
+
+The Settings screen's **Graphics** section offers: Quality (Auto — chosen from the detected GPU's unmasked renderer string, where software renderers get Low, discrete GPUs and Apple M-series get High, others Balanced, capped at Balanced on touch devices — or Low, Balanced, High, Ultra); Render scale 50–200% (multiplies the preset's scale; the device pixel ratio is capped at 1 / 1.5 / 2 / 2 per preset); one select per effect — Shadows (off / 1024² / 2048² / 4096²), Ambient occlusion (off / on / high), Bloom, Colour grade & vignette, Anti-aliasing (off / FXAA / SMAA / MSAA), Reflections, Grass & flowers (sparse 800 / medium 2,500 / dense 6,000 blades), Particles & pollen (low / high), Surface detail (plain / detailed) — each defaulting to "From preset (…)"; Adaptive resolution (on by default: over ~90-frame windows, steps the scale down 0.1 to a floor of 0.6 when frames average over 26 ms and back up 0.05 when under 14 ms); Show frame rate (a small readout at the bottom centre that never takes pointer input); the camera view; and a summary line "GPU · cost summary · W×H px". Choosing a preset clears the overrides. Changes apply immediately without reload (shadow maps, materials, environment, post chain, pixel ratio; foliage, detail and particle changes rebuild the arena decor in place) and are saved with the other settings (`serpentquest.settings`: `quality` holds the preset, `graphics` the scale, toggles and overrides; an old `medium` becomes Balanced). If the post chain cannot be built the game renders without it and the panel says so. The Graphics section's text follows the browser language in en-US, en-GB, es-419, es-ES, de-DE, fr-FR, fr-CA, pt-BR and it-IT. The resolved preset is exposed as `data-gfx-preset` on `<body>` and the game canvas. Graphics settings never change rules, hazards or scoring.
+
 ### Performance budgets
 
 - Target 60 fps at the default tier and a stable 30 fps fallback on constrained mobile hardware.
@@ -159,7 +165,8 @@ Follow the skill pack's acceptance gate: deterministic seeds, debug views for co
 - `bootstrap`: host handshake, capability detection, asset manifest, lifecycle.
 - `rules`: pure deterministic state transitions, legality, scoring, seeded random stream.
 - `session`: local or hosted commands, snapshots, prediction policy, reconnect, replay.
-- `render`: Three.js scene graph, semantic entity views, camera, lighting, VFX, quality.
+- `render`: Three.js scene graph, semantic entity views, camera, lighting, VFX, graphics pipeline (shadows, environment, post chain, adaptive resolution) — `js/render.js`.
+- `gfx`: pure graphics quality model — presets, categories, GPU detection, `resolve()`, `presetTier()`, `describe()` — `js/gfx.js`; Graphics panel strings per locale — `js/gfx-strings.js`; post-processing/environment addons — `vendor/addons/` (three r160, same revision as `vendor/three.module.js`).
 - `ui`: responsive DOM shell, focus, localization, settings, overlays, accessibility mirror.
 - `audio`: buses, event mapping, focus/background behavior, decode and memory policy.
 - `content`: versioned levels, themes, tutorials, validation metadata.
@@ -248,6 +255,7 @@ Success targets for the first public test: median first-play time under 20 secon
 - Produce fixed-camera captures for every quality tier, deterministic seed sweeps, no-post baselines, debug-view mosaics, and 10-minute temporal stability runs.
 - Profile CPU, GPU, memory, shader compilation, draw calls, triangles, texture memory, and garbage collection on representative desktop and mobile classes.
 - Verify effects cannot obscure legal targets, alter picking, leak resources, or continue expensive updates while hidden.
+- `npm test` covers the graphics model (GPU detection, preset/override resolution, render-scale clamp, preset clearing overrides, locale completeness); `npm run test:e2e` drives Settings → Graphics at desktop and phone sizes (Low → High, a bloom override, reload persistence, Ultra, frame-rate readout) and fails on any console error or warning.
 
 ### Platform and network
 

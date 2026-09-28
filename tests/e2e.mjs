@@ -453,6 +453,99 @@ async function runPass(browser, name, ctxOpts, { full }) {
 }
 
 // ---------------------------------------------------------------------------
+// Graphics settings pass: Settings → Graphics through the visible controls.
+// Switches presets (Low, High, Ultra), toggles an override, checks it is
+// applied (data-gfx-preset + renderer info + summary), survives a reload, and
+// that choosing a preset clears overrides. Any console error OR warning fails.
+// ---------------------------------------------------------------------------
+
+async function runGraphicsPass(browser, name, ctxOpts) {
+  const errors = [];
+  const context = await browser.newContext(ctxOpts);
+  const page = await context.newPage();
+  page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+  page.on('console', (m) => {
+    if ((m.type() !== 'error' && m.type() !== 'warning') || browserNoise.test(m.text())) return;
+    const url = m.location()?.url || '';
+    if (/Failed to load resource/.test(m.text()) && /\/api\/|\/favicon/.test(url)) return;
+    errors.push(`console ${m.type()}: ${m.text()}`);
+  });
+  const vw = ctxOpts.viewport.width;
+  const openGraphics = async () => {
+    await page.waitForSelector('#screen-title.active', { timeout: 15000 });
+    await page.locator('#btn-settings-top').click();
+    await page.waitForSelector('#screen-settings.active #gfx-card');
+    await page.locator('#set-gfx-preset').scrollIntoViewIfNeeded();
+  };
+  const applied = () => page.evaluate(() => ({
+    body: document.body.dataset.gfxPreset,
+    canvas: document.getElementById('game-canvas').dataset.gfxPreset,
+    summary: document.getElementById('gfx-summary')?.textContent || '',
+    summaryPreset: document.getElementById('gfx-summary')?.dataset.gfxPreset,
+    info: window.__sq.renderer.graphicsInfo(),
+  }));
+  try {
+    await page.goto(BASE, { waitUntil: 'load' });
+    await openGraphics();
+    const auto = await applied();
+    if (auto.info.detected !== 'low') throw new Error(`software GPU should auto-detect Low, got ${auto.info.detected} (${auto.info.gpu})`);
+    ok(`[${name}] Settings → Graphics open; Auto detected Low on "${auto.info.gpu}"`);
+
+    // Every graphics control fits the viewport (no horizontal cut-off).
+    const overflow = await page.evaluate((vw) => [...document.querySelectorAll('#gfx-card select, #gfx-card input, #gfx-card label')]
+      .map((e) => e.getBoundingClientRect()).filter((r) => r.width > 0 && (r.left < 0 || r.right > vw + 0.5)).length, vw);
+    if (overflow) throw new Error(`${overflow} graphics controls overflow the ${vw}px viewport`);
+
+    await page.selectOption('#set-gfx-preset', 'low');
+    let a = await applied();
+    if (a.body !== 'low' || a.canvas !== 'low' || a.summaryPreset !== 'low') throw new Error('Low not applied: ' + JSON.stringify(a));
+    if (!/no shadows/.test(a.summary) && !/sombras|Schatten|ombres|ombre/.test(a.summary)) throw new Error('Low summary unexpected: ' + a.summary);
+
+    await page.selectOption('#set-gfx-preset', 'high');
+    a = await applied();
+    if (a.body !== 'high' || a.info.resolved.shadows !== 'medium' || a.info.resolved.bloom !== 'on') throw new Error('High not applied: ' + JSON.stringify(a));
+    await page.locator('#set-gfx-bloom').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: SHOT('graphics-high', name) });
+
+    // One override: bloom off.
+    await page.selectOption('#set-gfx-bloom', 'off');
+    a = await applied();
+    if (a.info.resolved.bloom !== 'off' || a.info.resolved.preset !== 'high') throw new Error('bloom override not applied: ' + JSON.stringify(a.info.resolved));
+    await page.waitForTimeout(600); // let a few High frames render (post chain builds lazily)
+    if (await page.locator('#gfx-post-note').count()) throw new Error('post-processing reported unavailable');
+    ok(`[${name}] Low → High applied (data-gfx-preset, summary "${a.summary}") + bloom override`);
+
+    // Survives a reload.
+    await page.reload({ waitUntil: 'load' });
+    await openGraphics();
+    const presetVal = await page.inputValue('#set-gfx-preset');
+    const bloomVal = await page.inputValue('#set-gfx-bloom');
+    a = await applied();
+    if (presetVal !== 'high' || bloomVal !== 'off' || a.body !== 'high' || a.info.resolved.bloom !== 'off') {
+      throw new Error(`graphics settings not persisted: preset=${presetVal} bloom=${bloomVal} ${JSON.stringify(a.info.resolved)}`);
+    }
+    ok(`[${name}] graphics settings persisted across reload (High + bloom off)`);
+
+    // Ultra renders cleanly; choosing a preset clears overrides.
+    await page.selectOption('#set-gfx-preset', 'ultra');
+    await page.waitForTimeout(900);
+    a = await applied();
+    if (a.body !== 'ultra' || a.info.resolved.bloom !== 'on' || (await page.inputValue('#set-gfx-bloom')) !== 'preset') {
+      throw new Error('choosing Ultra did not clear the override: ' + JSON.stringify(a.info.resolved));
+    }
+    await page.locator('#set-gfx-fps').check();
+    if (!(await page.locator('#fps-meter').isVisible())) throw new Error('frame-rate readout not shown');
+    await page.locator('#set-gfx-fps').uncheck();
+    await page.selectOption('#set-gfx-preset', 'low');
+    ok(`[${name}] Ultra rendered, preset change cleared overrides, frame-rate toggle works`);
+  } finally {
+    await context.close();
+  }
+  if (errors.length) throw new Error(`${name} graphics pass had console output:\n  ${errors.join('\n  ')}`);
+  ok(`[${name}] graphics pass: no console errors or warnings`);
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -460,12 +553,14 @@ let browser = null;
 try {
   browser = await chromium.launch({
     executablePath: '/usr/bin/google-chrome',
-    args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--mute-audio'],
+    args: ['--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--mute-audio'],
   });
   console.log(`serving ${ROOT} at ${BASE}`);
   await runPass(browser, 'desktop', { viewport: { width: 1280, height: 800 } }, { full: true });
   await runPass(browser, 'mobile',
     { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true }, { full: false });
+  await runGraphicsPass(browser, 'desktop', { viewport: { width: 1280, height: 800 } });
+  await runGraphicsPass(browser, 'mobile', { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   console.log('\nE2E PASS — serpent-quest, desktop + mobile, no page errors');
 } catch (e) {
   failures++;

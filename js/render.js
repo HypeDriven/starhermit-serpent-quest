@@ -6,6 +6,46 @@
 // touches the DOM/WebGL.
 
 import * as THREE from '../vendor/three.module.js';
+import { detectPreset, resolve, SHADOW_MAP, FOLIAGE, PARTICLE_SCALE } from './gfx.js';
+
+// Post-processing and image-based-lighting addons (three r160, vendored under
+// vendor/addons and mapped by the page importmap). Loaded lazily the first
+// time a setting needs them, so the Low preset never fetches them.
+const ADDON_PATHS = {
+  EffectComposer: 'three/addons/postprocessing/EffectComposer.js',
+  RenderPass: 'three/addons/postprocessing/RenderPass.js',
+  ShaderPass: 'three/addons/postprocessing/ShaderPass.js',
+  OutputPass: 'three/addons/postprocessing/OutputPass.js',
+  GTAOPass: 'three/addons/postprocessing/GTAOPass.js',
+  UnrealBloomPass: 'three/addons/postprocessing/UnrealBloomPass.js',
+  SMAAPass: 'three/addons/postprocessing/SMAAPass.js',
+  FXAAShader: 'three/addons/shaders/FXAAShader.js',
+  RoomEnvironment: 'three/addons/environments/RoomEnvironment.js',
+};
+
+// Colour grade + vignette (linear HDR in, before OutputPass tone mapping).
+// Gentle S-curve, a touch of saturation, warm highlights / cool shadows.
+// Never crushes darks: the pieces and board keep their contrast.
+const GradeShader = {
+  uniforms: { tDiffuse: { value: null }, uAmount: { value: 1.0 }, uVignette: { value: 0.2 } },
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float uAmount; uniform float uVignette;
+    varying vec2 vUv;
+    void main() {
+      vec4 src = texture2D(tDiffuse, vUv);
+      vec3 c = src.rgb;
+      vec3 lc = clamp(c, 0.0, 1.0);
+      vec3 s = mix(lc, lc * lc * (3.0 - 2.0 * lc), 0.18);
+      float l = dot(s, vec3(0.299, 0.587, 0.114));
+      s = mix(vec3(l), s, 1.1);
+      s *= mix(vec3(0.97, 0.99, 1.04), vec3(1.04, 1.01, 0.95), smoothstep(0.15, 0.8, l));
+      c = mix(c, s + max(c - 1.0, 0.0), uAmount);
+      float d = length((vUv - 0.5) * vec2(1.0, 0.85));
+      c *= 1.0 - uVignette * smoothstep(0.38, 0.85, d);
+      gl_FragColor = vec4(c, src.a);
+    }`,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -28,11 +68,7 @@ const SUB = 2;                   // curve samples per body joint
 const MAX_FOOD_VIEWS = 16;
 const MAX_PARTICLES = 640;       // pool size; tier scales spawn counts
 
-const QUALITY_TIERS = {
-  low:    { dpr: 1.0, shadows: false, grass: 800,  flowers: 40,  shadowMap: 512,  particleScale: 0.4 },
-  medium: { dpr: 1.5, shadows: true,  grass: 2500, flowers: 90,  shadowMap: 1024, particleScale: 0.7 },
-  high:   { dpr: 2.0, shadows: true,  grass: 6000, flowers: 160, shadowMap: 2048, particleScale: 1.0 },
-};
+const POLLEN_COUNT = 110;         // ambient drifting motes (particles: high)
 
 const TAP_MAX_DIST = 12;         // px
 const TAP_MAX_MS = 400;
@@ -127,6 +163,107 @@ function catmull(p0, p1, p2, p3, t) {
   return 0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
 }
 
+// ---------------------------------------------------------------------------
+// Procedural textures (graphics detail: detailed). Browser-only; created
+// lazily on first use and shared across arenas.
+// ---------------------------------------------------------------------------
+
+// Tileable multi-octave value noise in [0,1].
+function tileNoise(size, seed, octaves) {
+  const out = new Float32Array(size * size);
+  const rnd = mulberry32(seed);
+  let amp = 1, total = 0;
+  for (let o = 0; o < octaves; o++) {
+    const cells = 4 << o;
+    const grid = new Float32Array(cells * cells);
+    for (let i = 0; i < grid.length; i++) grid[i] = rnd();
+    for (let y = 0; y < size; y++) {
+      const fy = (y / size) * cells, y0 = fy | 0, ty = fy - y0, sy = ty * ty * (3 - 2 * ty);
+      for (let x = 0; x < size; x++) {
+        const fx = (x / size) * cells, x0 = fx | 0, tx = fx - x0, sx = tx * tx * (3 - 2 * tx);
+        const x1 = (x0 + 1) % cells, y1 = (y0 + 1) % cells;
+        const a = grid[y0 * cells + x0], b = grid[y0 * cells + x1];
+        const c = grid[y1 * cells + x0], d = grid[y1 * cells + x1];
+        out[y * size + x] += amp * ((a + (b - a) * sx) + ((c + (d - c) * sx) - (a + (b - a) * sx)) * sy);
+      }
+    }
+    total += amp;
+    amp *= 0.5;
+  }
+  for (let i = 0; i < out.length; i++) out[i] /= total;
+  return out;
+}
+
+function canvasTexture(size, paint, srgb) {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = size;
+  const ctx = cv.getContext('2d');
+  paint(ctx, size);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+function greyTexture(size, fn, srgb) {
+  return canvasTexture(size, (ctx, n) => {
+    const img = ctx.createImageData(n, n);
+    for (let i = 0; i < n * n; i++) {
+      const v = Math.max(0, Math.min(255, Math.round(fn(i % n, (i / n) | 0) * 255)));
+      img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v;
+      img.data[i * 4 + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+  }, srgb);
+}
+
+const TEX = {};
+function detailTextures() {
+  if (TEX.ground) return TEX;
+  // Ground: soft mottling plus fine speckle, near-white so it only modulates
+  // the theme's vertex colours (the cell checker stays readable).
+  const n = tileNoise(256, 0x9a55, 5);
+  const sp = mulberry32(0x5eed5);
+  const speck = new Float32Array(256 * 256).map(() => sp());
+  TEX.ground = greyTexture(256, (x, y) => 0.8 + 0.2 * n[y * 256 + x] - (speck[y * 256 + x] > 0.985 ? 0.12 : 0), true);
+  TEX.groundBump = greyTexture(256, (x, y) => n[y * 256 + x] * 0.7 + speck[y * 256 + x] * 0.3, false);
+  // Hedge: clumpy leaves.
+  const leaf = tileNoise(128, 0x1eaf, 4);
+  TEX.leaf = greyTexture(128, (x, y) => 0.72 + 0.28 * Math.pow(leaf[y * 128 + x], 0.8), true);
+  TEX.leafBump = greyTexture(128, (x, y) => leaf[y * 128 + x], false);
+  // Serpent scales: offset rows of rounded scales (bump height).
+  TEX.scales = canvasTexture(128, (ctx, s) => {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, s, s);
+    const rows = 8, cols = 8, w = s / cols, h = s / rows;
+    for (let r = -1; r <= rows; r++) {
+      for (let c = -1; c <= cols; c++) {
+        const cx = (c + (r % 2 ? 0.5 : 0)) * w + w / 2, cy = r * h + h / 2;
+        const g = ctx.createRadialGradient(cx, cy - h * 0.2, 1, cx, cy, w * 0.62);
+        g.addColorStop(0, '#fff');
+        g.addColorStop(0.75, '#999');
+        g.addColorStop(1, '#000');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, w * 0.58, h * 0.62, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }, false);
+  // Soft round sprite for particles and pollen.
+  TEX.dot = canvasTexture(64, (ctx, s) => {
+    const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+    g.addColorStop(0, 'rgba(255,255,255,1)');
+    g.addColorStop(0.35, 'rgba(255,255,255,0.8)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, s, s);
+  }, true);
+  TEX.dot.wrapS = TEX.dot.wrapT = THREE.ClampToEdgeWrapping;
+  return TEX;
+}
+
 // Critically damped spring (explicit velocity state; no cumulative lerp).
 class Spring3 {
   constructor() {
@@ -152,7 +289,7 @@ class Spring3 {
 // ---------------------------------------------------------------------------
 
 class ParticlePool {
-  constructor(scene) {
+  constructor(scene, dotTex) {
     this.max = MAX_PARTICLES;
     this.pos = new Float32Array(this.max * 3);
     this.col = new Float32Array(this.max * 3);
@@ -170,8 +307,8 @@ class ParticlePool {
     geom.setAttribute('position', this.posAttr);
     geom.setAttribute('color', this.colAttr);
     this.material = new THREE.PointsMaterial({
-      size: 0.14, vertexColors: true, transparent: true, depthWrite: false,
-      blending: THREE.AdditiveBlending, sizeAttenuation: true,
+      size: dotTex ? 0.22 : 0.14, vertexColors: true, transparent: true, depthWrite: false,
+      blending: THREE.AdditiveBlending, sizeAttenuation: true, map: dotTex || null,
     });
     this.points = new THREE.Points(geom, this.material);
     this.points.frustumCulled = false;
@@ -242,6 +379,50 @@ class ParticlePool {
 }
 
 // ---------------------------------------------------------------------------
+// Ambient pollen: a few soft motes drifting over the arena (particles: high).
+// Pure function of the decorative clock, so it freezes with pause and is
+// hidden under reduced motion.
+// ---------------------------------------------------------------------------
+
+class PollenField {
+  constructor(parent, dotTex, w, h, hex) {
+    this.n = POLLEN_COUNT;
+    this.base = new Float32Array(this.n * 4);
+    this.pos = new Float32Array(this.n * 3);
+    const r = mulberry32(0x9011e);
+    for (let i = 0; i < this.n; i++) {
+      this.base[i * 4] = (r() - 0.5) * (w + 2);
+      this.base[i * 4 + 1] = 0.25 + r() * 1.6;
+      this.base[i * 4 + 2] = (r() - 0.5) * (h + 2);
+      this.base[i * 4 + 3] = r() * 100;
+    }
+    const geom = new THREE.BufferGeometry();
+    this.attr = new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage);
+    geom.setAttribute('position', this.attr);
+    this.material = new THREE.PointsMaterial({
+      size: 0.09, map: dotTex, color: new THREE.Color(hex).lerp(new THREE.Color(0xffffff), 0.5).multiplyScalar(1.3),
+      transparent: true, opacity: 0.75, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    this.points = new THREE.Points(geom, this.material);
+    this.points.frustumCulled = false;
+    this.points.layers.set(LAYER_DECOR);
+    parent.add(this.points);
+    this.update(0);
+  }
+
+  update(t) {
+    const b = this.base, p = this.pos;
+    for (let i = 0; i < this.n; i++) {
+      const ph = b[i * 4 + 3], k = t * 0.35 + ph;
+      p[i * 3] = b[i * 4] + Math.sin(k * 0.7) * 0.9 + Math.sin(k * 1.9) * 0.2;
+      p[i * 3 + 1] = b[i * 4 + 1] + Math.sin(k * 1.3) * 0.25;
+      p[i * 3 + 2] = b[i * 4 + 2] + Math.cos(k * 0.55) * 0.9;
+    }
+    this.attr.needsUpdate = true;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Serpent view: smooth instanced chain along a Catmull-Rom curve through
 // interpolated cell centers, plus an authored head (eyes, raised pose) and
 // optional spiky back plates for big rivals. Keeps its own prev/cur buffers
@@ -267,8 +448,23 @@ class SerpentView {
 
     this.group = new THREE.Group();
 
-    const bodyGeom = new THREE.SphereGeometry(0.34 * this.scale, 14, 10);
-    this.bodyMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.55, metalness: 0 });
+    // Detailed: glossy clear-coated scales (bump-mapped) that catch the
+    // environment; plain: the original matte look.
+    const tex = opts.detail ? detailTextures() : null;
+    const skin = (params, clear) => (tex
+      ? new THREE.MeshPhysicalMaterial({
+        ...params, roughness: Math.max(0.3, params.roughness - 0.15),
+        clearcoat: clear, clearcoatRoughness: 0.3, envMapIntensity: 0.14,
+      })
+      : new THREE.MeshStandardMaterial({ ...params, envMapIntensity: 0.14 }));
+    const bodyGeom = new THREE.SphereGeometry(0.34 * this.scale, tex ? 20 : 14, tex ? 14 : 10);
+    this.bodyMat = skin({ color: 0xffffff, roughness: 0.55, metalness: 0 }, 0.4);
+    if (tex) {
+      this.bodyMat.bumpMap = tex.scales.clone();
+      this.bodyMat.bumpMap.needsUpdate = true;
+      this.bodyMat.bumpMap.repeat.set(4, 2);
+      this.bodyMat.bumpScale = 1.4;
+    }
     this.bodyMesh = new THREE.InstancedMesh(bodyGeom, this.bodyMat, this.maxSamples);
     this.bodyMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.bodyMesh.castShadow = true;
@@ -277,7 +473,7 @@ class SerpentView {
 
     const bellyGeom = new THREE.SphereGeometry(0.30 * this.scale, 12, 8);
     bellyGeom.scale(0.82, 0.5, 0.82);
-    this.bellyMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, metalness: 0 });
+    this.bellyMat = skin({ color: 0xffffff, roughness: 0.7, metalness: 0 }, 0.2);
     this.bellyMesh = new THREE.InstancedMesh(bellyGeom, this.bellyMat, this.maxSamples);
     this.bellyMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.bellyMesh.frustumCulled = false;
@@ -286,7 +482,7 @@ class SerpentView {
     if (this.spiky) {
       const spikeGeom = new THREE.ConeGeometry(0.11 * this.scale, 0.3 * this.scale, 5);
       const c = new THREE.Color(opts.bodyColor).multiplyScalar(0.45);
-      this.spikeMat = new THREE.MeshStandardMaterial({ color: c, roughness: 0.5, metalness: 0.1 });
+      this.spikeMat = skin({ color: c, roughness: 0.5, metalness: 0.1 }, 0.4);
       this.spikeMesh = new THREE.InstancedMesh(spikeGeom, this.spikeMat, this.maxSamples);
       this.spikeMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       this.spikeMesh.castShadow = true;
@@ -296,7 +492,7 @@ class SerpentView {
 
     // Head: sphere + eyes + pupils, local +Z is forward.
     this.head = new THREE.Group();
-    const headMat = new THREE.MeshStandardMaterial({ color: opts.headColor, roughness: 0.5, metalness: 0 });
+    const headMat = skin({ color: opts.headColor, roughness: 0.5, metalness: 0 }, 0.5);
     this.headMat = headMat;
     const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.4 * this.scale, 18, 14), headMat);
     headMesh.scale.set(1, 0.92, 1.08);
@@ -304,8 +500,8 @@ class SerpentView {
     this.head.add(headMesh);
     const eyeGeom = new THREE.SphereGeometry(0.095 * this.scale, 10, 8);
     const pupilGeom = new THREE.SphereGeometry(0.05 * this.scale, 8, 6);
-    const eyeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3 });
-    const pupilMat = new THREE.MeshStandardMaterial({ color: 0x14181c, roughness: 0.25 });
+    const eyeMat = skin({ color: 0xffffff, roughness: 0.3 }, 1);
+    const pupilMat = skin({ color: 0x14181c, roughness: 0.25 }, 1);
     for (const side of [-1, 1]) {
       const eye = new THREE.Mesh(eyeGeom, eyeMat);
       eye.position.set(side * 0.19 * this.scale, 0.14 * this.scale, 0.3 * this.scale);
@@ -449,6 +645,7 @@ class SerpentView {
 
   dispose() {
     this.group.removeFromParent();
+    if (this.bodyMat.bumpMap) this.bodyMat.bumpMap.dispose();
     this.bodyMesh.geometry.dispose(); this.bodyMat.dispose(); this.bodyMesh.dispose();
     this.bellyMesh.geometry.dispose(); this.bellyMat.dispose(); this.bellyMesh.dispose();
     if (this.spiky) { this.spikeMesh.geometry.dispose(); this.spikeMat.dispose(); this.spikeMesh.dispose(); }
@@ -472,6 +669,20 @@ export function createRenderer(opts) {
   renderer.toneMappingExposure = 1.0;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+  // GPU name for Auto quality + the settings summary. Firefox exposes the
+  // unmasked name through RENDERER and deprecates the debug extension.
+  let gpu = '';
+  try {
+    const gl = renderer.getContext();
+    const ff = typeof navigator !== 'undefined' && /firefox/i.test(navigator.userAgent);
+    const ext = ff ? null : gl.getExtension('WEBGL_debug_renderer_info');
+    gpu = String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
+  } catch (e) { gpu = ''; }
+  const mobile = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches &&
+    typeof navigator !== 'undefined' && (navigator.maxTouchPoints || 0) > 0;
+  const detected = detectPreset(gpu, { mobile });
+  let gq = resolve({ preset: 'auto' }, detected); // resolved graphics settings
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(CAMERA_FOV, 1, 0.1, 400);
@@ -513,7 +724,19 @@ export function createRenderer(opts) {
   let theme = null;
   let gridW = 0, gridH = 0;
   let lastState = null;
-  let qualityTier = 'high';
+  let pollen = null;
+  // Graphics pipeline state
+  let addons = null;              // loaded post/IBL modules
+  let addonsLoading = null;
+  let postFailed = false;
+  let composer = null;
+  let postKey = 'none';
+  let envTexture = null;
+  let adaptiveScale = 1;
+  const frameTimes = [];
+  let fps = 0;
+  let pixelRatio = 1;
+  let sizeW = 0, sizeH = 0;
   let paused = false;
   let hidden = false;
   let contextLost = false;
@@ -559,13 +782,18 @@ export function createRenderer(opts) {
       if (o.isMesh || o.isPoints) {
         if (o.geometry) o.geometry.dispose();
         const mats = Array.isArray(o.material) ? o.material : [o.material];
-        for (const m of mats) if (m && m !== SerpentView.blobMaterial) m.dispose();
+        for (const m of mats) {
+          if (!m || m === SerpentView.blobMaterial) continue;
+          for (const k of ['map', 'bumpMap']) if (m[k] && !isSharedTexture(m[k])) m[k].dispose();
+          m.dispose();
+        }
         if (o.isInstancedMesh) o.dispose();
       }
     });
     world.removeFromParent();
     world = null;
     particles = null;
+    pollen = null;
     groundMesh = null;
     foodViews = [];
     markerGroup = null;
@@ -573,6 +801,10 @@ export function createRenderer(opts) {
     hintArrows = null;
     hintDirs = null;
     previewPos = null;
+  }
+
+  function isSharedTexture(t) {
+    return Object.values(TEX).includes(t);
   }
 
   function buildGround(rng) {
@@ -594,7 +826,14 @@ export function createRenderer(opts) {
       colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
     }
     geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0 });
+    const tex = gq.detail === 'detailed' ? detailTextures() : null;
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, envMapIntensity: 0.06 });
+    if (tex) {
+      mat.map = tex.ground.clone(); mat.map.needsUpdate = true; mat.map.repeat.set(gridW / 5, gridH / 5);
+      mat.bumpMap = tex.groundBump.clone(); mat.bumpMap.needsUpdate = true; mat.bumpMap.repeat.set(gridW / 5, gridH / 5);
+      mat.bumpScale = 1.5;
+      mat.roughness = 0.94;
+    }
     groundMesh = new THREE.Mesh(geom, mat);
     groundMesh.receiveShadow = true;
     groundMesh.layers.set(LAYER_GAME);
@@ -604,7 +843,11 @@ export function createRenderer(opts) {
     const apronSize = Math.max(gridW, gridH) * 3.2;
     const apron = new THREE.Mesh(
       new THREE.PlaneGeometry(apronSize, apronSize),
-      new THREE.MeshStandardMaterial({ color: groundDark, roughness: 1 }));
+      new THREE.MeshStandardMaterial({ color: groundDark, roughness: 1, envMapIntensity: 0.06 }));
+    if (tex) {
+      apron.material.map = tex.ground.clone(); apron.material.map.needsUpdate = true;
+      apron.material.map.repeat.set(apronSize / 5, apronSize / 5);
+    }
     apron.rotation.x = -Math.PI / 2;
     apron.position.y = -0.03;
     apron.receiveShadow = true;
@@ -620,7 +863,7 @@ export function createRenderer(opts) {
       const y = p.getY(i);
       p.setX(i, p.getX(i) * Math.max(0.08, 1 - y * 1.9));
     }
-    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, side: THREE.DoubleSide });
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, side: THREE.DoubleSide, envMapIntensity: 0.08 });
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = windUniforms.uTime;
       shader.uniforms.uAmp = windUniforms.uAmp;
@@ -677,8 +920,8 @@ export function createRenderer(opts) {
     const stemGeom = new THREE.CylinderGeometry(0.02, 0.03, 0.34, 5);
     stemGeom.translate(0, 0.17, 0);
     const headGeom = new THREE.IcosahedronGeometry(0.09, 0);
-    const stemMat = new THREE.MeshStandardMaterial({ color: theme.hedge, roughness: 0.9 });
-    const headMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 });
+    const stemMat = new THREE.MeshStandardMaterial({ color: theme.hedge, roughness: 0.9, envMapIntensity: 0.08 });
+    const headMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6, envMapIntensity: 0.12 });
     const stems = new THREE.InstancedMesh(stemGeom, stemMat, count);
     const heads = new THREE.InstancedMesh(headGeom, headMat, count);
     stems.layers.set(LAYER_DECOR);
@@ -715,10 +958,21 @@ export function createRenderer(opts) {
     world.add(heads);
   }
 
+  function hedgeMaterial() {
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, envMapIntensity: 0.08 });
+    if (gq.detail === 'detailed') {
+      const tex = detailTextures();
+      mat.map = tex.leaf.clone(); mat.map.needsUpdate = true; mat.map.repeat.set(2, 1);
+      mat.bumpMap = tex.leafBump.clone(); mat.bumpMap.needsUpdate = true; mat.bumpMap.repeat.set(2, 1);
+      mat.bumpScale = 3;
+    }
+    return mat;
+  }
+
   function buildHedgeWall(rng) {
     const perim = 2 * (gridW + 1) + 2 * (gridH + 1);
     const geom = new THREE.BoxGeometry(1.02, 0.55, 0.4);
-    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 });
+    const mat = hedgeMaterial();
     const mesh = new THREE.InstancedMesh(geom, mat, perim);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -793,7 +1047,7 @@ export function createRenderer(opts) {
     rockGeoms.forEach((geom, gi) => {
       const list = rocks[gi];
       if (!list.length) { geom.dispose(); return; }
-      const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, flatShading: true });
+      const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.82, flatShading: true, envMapIntensity: 0.12 });
       const mesh = new THREE.InstancedMesh(geom, mat, list.length);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
@@ -817,7 +1071,7 @@ export function createRenderer(opts) {
 
     if (hedges.length) {
       const geom = new THREE.BoxGeometry(0.88, 0.6, 0.88);
-      const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 });
+      const mat = hedgeMaterial();
       const mesh = new THREE.InstancedMesh(geom, mat, hedges.length);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
@@ -874,16 +1128,20 @@ export function createRenderer(opts) {
 
   function buildFoodPool(palette) {
     const { berry, golden } = makeFoodGeometries();
-    const berryMat = new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness: 0.45,
-      color: adjustForPalette(theme.food, 'food', palette),
+    const detailed = gq.detail === 'detailed';
+    const Mat = detailed ? THREE.MeshPhysicalMaterial : THREE.MeshStandardMaterial;
+    const gloss = detailed ? { clearcoat: 1, clearcoatRoughness: 0.12, envMapIntensity: 0.35 } : { envMapIntensity: 0.25 };
+    const berryMat = new Mat({
+      vertexColors: true, roughness: detailed ? 0.32 : 0.45,
+      color: adjustForPalette(theme.food, 'food', palette), ...gloss,
     });
-    const goldenMat = new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness: 0.3,
+    const goldenMat = new Mat({
+      vertexColors: true, roughness: detailed ? 0.2 : 0.3, metalness: detailed ? 0.35 : 0,
       color: adjustForPalette(theme.foodGolden, 'foodGolden', palette),
       emissive: adjustForPalette(theme.foodGolden, 'foodGolden', palette),
-      emissiveIntensity: 0.55,
+      emissiveIntensity: 0.55, ...gloss,
     });
+    goldenMat.userData.glow = detailed ? 1.6 : 1; // bloom-friendly shimmer when detailed
     foodViews = [];
     for (let i = 0; i < MAX_FOOD_VIEWS; i++) {
       const group = new THREE.Group();
@@ -938,20 +1196,34 @@ export function createRenderer(opts) {
     keyLight.intensity = theme.sunIntensity;
     hemiLight.color.set(theme.sky);
     hemiLight.groundColor.set(theme.groundDark);
-    hemiLight.intensity = 0.75;
+    // Image-based lighting adds its own soft fill, so the hemisphere eases off.
+    hemiLight.intensity = scene.environment ? 0.65 : 0.75;
   }
 
   function positionLights() {
     const m = Math.max(gridW, gridH);
     keyLight.position.set(m * 0.7, m * 1.15, m * 0.45);
     keyLight.target.position.set(0, 0, 0);
-    const ext = m * 0.85;
+    keyLight.updateMatrixWorld();
+    keyLight.target.updateMatrixWorld();
+    // Fit the shadow frustum tightly around the arena + hedge wall, in light space.
     const cam = keyLight.shadow.camera;
-    cam.left = -ext; cam.right = ext; cam.top = ext; cam.bottom = -ext;
-    cam.near = 1; cam.far = m * 3;
+    cam.position.copy(keyLight.position);
+    cam.lookAt(keyLight.target.position);
+    cam.updateMatrixWorld();
+    const inv = cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
+    const hx = gridW / 2 + 1, hz = gridH / 2 + 1;
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const cx of [-hx, hx]) for (const cy of [0, 1.4]) for (const cz of [-hz, hz]) {
+      _v3.set(cx, cy, cz).applyMatrix4(inv);
+      x0 = Math.min(x0, _v3.x); x1 = Math.max(x1, _v3.x);
+      y0 = Math.min(y0, _v3.y); y1 = Math.max(y1, _v3.y);
+      z0 = Math.min(z0, _v3.z); z1 = Math.max(z1, _v3.z);
+    }
+    cam.left = x0; cam.right = x1; cam.bottom = y0; cam.top = y1;
+    cam.near = Math.max(0.1, -z1 - 1); cam.far = -z0 + 1;
     cam.updateProjectionMatrix();
-    keyLight.shadow.mapSize.set(QUALITY_TIERS[qualityTier].shadowMap, QUALITY_TIERS[qualityTier].shadowMap);
-    if (keyLight.shadow.map) { keyLight.shadow.map.dispose(); keyLight.shadow.map = null; }
+    applyShadowSize();
   }
 
   function cameraDistance() {
@@ -985,18 +1257,20 @@ export function createRenderer(opts) {
     const rng = mulberry32((cfg.seed ^ 0xdec0) >>> 0);
     const obstacles = cfg.obstacles || [];
     const obstacleSet = new Set(obstacles.map((c) => c.x + ',' + c.y));
-    const tier = QUALITY_TIERS[qualityTier];
+    const foliage = FOLIAGE[gq.foliage];
     const palette = readSettings().colorPalette;
 
     buildGround(rng);
-    buildGrass(tier.grass, rng, obstacleSet);
-    buildFlowers(tier.flowers, rng, obstacleSet);
+    buildGrass(foliage.grass, rng, obstacleSet);
+    buildFlowers(foliage.flowers, rng, obstacleSet);
     buildHedgeWall(rng);
     buildObstacles(obstacles);
     buildFoodPool(palette);
     buildMarkers();
 
-    particles = new ParticlePool(world);
+    const dot = gq.detail === 'detailed' ? detailTextures().dot : null;
+    particles = new ParticlePool(world, dot);
+    pollen = gq.particles === 'high' ? new PollenField(world, dot || detailTextures().dot, gridW, gridH, theme.foodGolden) : null;
     applyThemeToLights();
     positionLights();
 
@@ -1111,6 +1385,11 @@ export function createRenderer(opts) {
   function onContextRestored() {
     contextLost = false;
     renderer.state.reset();
+    // GPU-side post targets and the environment map died with the context.
+    disposePost();
+    postKey = null;
+    if (envTexture) { envTexture.dispose(); envTexture = null; scene.environment = null; }
+    applyEnvironment();
     if (config && theme) buildScene(config, theme);
     if (lastState) api.syncSnapshot(lastState, 1);
     if (opts.onContextRestored) opts.onContextRestored();
@@ -1183,7 +1462,8 @@ export function createRenderer(opts) {
       const sc = 1 + fv.pop * 0.55 + (fv.kind === 'golden' ? Math.sin(simTime * 3 + fv.phase) * 0.05 : 0);
       fv.group.scale.set(sc, sc, sc);
       if (fv.kind === 'golden') {
-        fv.golden.material.emissiveIntensity = 0.5 + Math.sin(simTime * 3.1 + fv.phase) * 0.2;
+        const glow = fv.golden.material.userData.glow || 1;
+        fv.golden.material.emissiveIntensity = (0.5 + Math.sin(simTime * 3.1 + fv.phase) * 0.2) * glow;
       }
     }
 
@@ -1197,6 +1477,15 @@ export function createRenderer(opts) {
     }
 
     if (particles) particles.update(dt);
+    if (pollen) {
+      const still = settings.reducedMotion || prefersReducedMotion();
+      pollen.points.visible = !still;
+      if (!still) pollen.update(simTime);
+    }
+  }
+
+  function prefersReducedMotion() {
+    try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
   }
 
   function frame(tMs) {
@@ -1209,7 +1498,167 @@ export function createRenderer(opts) {
 
     updateCamera(dt);
     if (!paused) updateDecor(dt);
-    if (world) renderer.render(scene, camera);
+    if (adapt(dt * 1000)) api.resize();
+    if (world) draw(dt);
+  }
+
+  // -------------------------------------------------------------------------
+  // Graphics pipeline: shadows, IBL, post chain, adaptive resolution
+  // -------------------------------------------------------------------------
+
+  function draw(dt) {
+    const key = postKeyFor();
+    if (key !== postKey) { postKey = key; buildPost(); }
+    if (composer) {
+      try { composer.render(dt); return; } catch (e) { postFailed = true; disposePost(); postKey = postKeyFor(); }
+    }
+    renderer.render(scene, camera);
+  }
+
+  function applyShadowSize() {
+    const size = SHADOW_MAP[gq.shadows];
+    renderer.shadowMap.enabled = size > 0;
+    keyLight.castShadow = size > 0;
+    if (size > 0 && keyLight.shadow.mapSize.x !== size) {
+      keyLight.shadow.mapSize.set(size, size);
+      if (keyLight.shadow.map) { keyLight.shadow.map.dispose(); keyLight.shadow.map = null; }
+    }
+  }
+
+  function needsAddons() {
+    return gq.post || gq.reflections === 'on';
+  }
+
+  function loadAddons() {
+    if (addons || addonsLoading || postFailed) return;
+    const names = Object.keys(ADDON_PATHS);
+    addonsLoading = Promise.all(names.map((n) => import(ADDON_PATHS[n])))
+      .then((mods) => {
+        addons = {};
+        mods.forEach((m, i) => { addons[names[i]] = m[names[i]]; });
+        addonsLoading = null;
+        postKey = null; // build on the next frame
+        applyEnvironment();
+      })
+      .catch(() => { addonsLoading = null; postFailed = true; api._notify(); });
+  }
+
+  function applyEnvironment() {
+    const want = gq.reflections === 'on';
+    if (want && !envTexture && addons) {
+      try {
+        const pmrem = new THREE.PMREMGenerator(renderer);
+        const room = new addons.RoomEnvironment(renderer);
+        envTexture = pmrem.fromScene(room, 0.04).texture;
+        room.traverse((o) => { if (o.isMesh) { o.geometry.dispose(); o.material.dispose(); } });
+        pmrem.dispose();
+      } catch (e) { envTexture = null; }
+    }
+    const next = want && envTexture ? envTexture : null;
+    if (scene.environment !== next) {
+      scene.environment = next;
+      markMaterialsDirty();
+      if (theme) applyThemeToLights();
+    }
+  }
+
+  function markMaterialsDirty() {
+    scene.traverse((o) => {
+      if (o.material) {
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) m.needsUpdate = true;
+      }
+    });
+  }
+
+  function postKeyFor() {
+    if (!gq.post || postFailed) return 'none';
+    if (!addons) return 'pending';
+    return [gq.ao, gq.bloom, gq.grade, gq.antialias, sizeW, sizeH, pixelRatio].join('|');
+  }
+
+  function disposePost() {
+    if (composer) {
+      for (const p of composer.passes) if (p.dispose) p.dispose();
+      composer.renderTarget1.dispose();
+      composer.renderTarget2.dispose();
+    }
+    composer = null;
+  }
+
+  function buildPost() {
+    disposePost();
+    if (!gq.post || postFailed) return;
+    if (!addons) { loadAddons(); return; }
+    const A = addons;
+    const w = Math.max(1, sizeW), h = Math.max(1, sizeH);
+    const pw = Math.max(1, Math.round(w * pixelRatio)), ph = Math.max(1, Math.round(h * pixelRatio));
+    try {
+      const target = new THREE.WebGLRenderTarget(pw, ph, {
+        type: THREE.HalfFloatType, samples: gq.antialias === 'msaa' ? 4 : 0,
+      });
+      const c = new A.EffectComposer(renderer, target);
+      c.setPixelRatio(pixelRatio);
+      c.setSize(w, h);
+      c.addPass(new A.RenderPass(scene, camera));
+      if (gq.ao !== 'off') {
+        const ao = new A.GTAOPass(scene, camera, pw, ph);
+        ao.output = A.GTAOPass.OUTPUT.Default;
+        ao.blendIntensity = gq.ao === 'high' ? 0.8 : 0.65;
+        ao.updateGtaoMaterial({ radius: 0.45, distanceExponent: 1.5, thickness: 1.0, scale: 1.0, samples: gq.ao === 'high' ? 16 : 8 });
+        ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: gq.ao === 'high' ? 6 : 4, rings: 2, samples: gq.ao === 'high' ? 16 : 8 });
+        c.addPass(ao);
+      }
+      if (gq.bloom === 'on') {
+        // High threshold: only golden food, particles and bright glints bloom.
+        c.addPass(new A.UnrealBloomPass(new THREE.Vector2(w, h), 0.35, 0.35, 0.92));
+      }
+      if (gq.grade === 'on') c.addPass(new A.ShaderPass(GradeShader));
+      c.addPass(new A.OutputPass());
+      if (gq.antialias === 'smaa') c.addPass(new A.SMAAPass(pw, ph));
+      if (gq.antialias === 'fxaa') {
+        const fxaa = new A.ShaderPass(A.FXAAShader);
+        fxaa.material.uniforms.resolution.value.set(1 / pw, 1 / ph);
+        c.addPass(fxaa);
+      }
+      composer = c;
+    } catch (e) {
+      // Post-processing is an enhancement: render directly and say so in Settings.
+      postFailed = true;
+      composer = null;
+      api._notify();
+    }
+  }
+
+  // Adaptive resolution: average ~90 frames; step down when slow, up when fast.
+  function adapt(ms) {
+    frameTimes.push(ms);
+    if (frameTimes.length < 90) return false;
+    let sum = 0;
+    for (const t of frameTimes) sum += t;
+    const avg = sum / frameTimes.length;
+    frameTimes.length = 0;
+    fps = 1000 / avg;
+    const el = typeof document !== 'undefined' && document.getElementById('fps-meter');
+    if (el && !el.hidden) el.textContent = `${Math.round(fps)} fps · ${Math.round(pixelRatio * 100) / 100}×`;
+    if (!gq.adaptive) return false;
+    const before = adaptiveScale;
+    if (avg > 26) adaptiveScale = Math.max(0.6, adaptiveScale - 0.1);
+    else if (avg < 14 && adaptiveScale < 1) adaptiveScale = Math.min(1, adaptiveScale + 0.05);
+    return before !== adaptiveScale;
+  }
+
+  function showFpsMeter(on) {
+    if (typeof document === 'undefined') return;
+    let el = document.getElementById('fps-meter');
+    if (on && !el) {
+      el = document.createElement('div');
+      el.id = 'fps-meter';
+      el.setAttribute('aria-hidden', 'true');
+      el.textContent = '… fps';
+      document.body.append(el);
+    }
+    if (el) el.hidden = !on;
   }
   rafId = requestAnimationFrame(frame);
 
@@ -1231,7 +1680,7 @@ export function createRenderer(opts) {
 
       if (!playerView) {
         playerView = new SerpentView(world, {
-          scale: 1, spiky: false, maxJoints: MAX_JOINTS,
+          scale: 1, spiky: false, maxJoints: MAX_JOINTS, detail: gq.detail === 'detailed',
           headColor: theme.snakeHead, bodyColor: theme.snakeBody, bellyColor: theme.snakeBelly,
         });
       }
@@ -1246,7 +1695,7 @@ export function createRenderer(opts) {
           view = new SerpentView(world, {
             scale: big ? 1.3 : 0.72,
             spiky: big,
-            maxJoints: RIVAL_MAX_JOINTS,
+            maxJoints: RIVAL_MAX_JOINTS, detail: gq.detail === 'detailed',
             headColor: adjustForPalette(big ? theme.rivalBig : theme.rivalSmall, big ? 'rivalBig' : 'rivalSmall', palette),
             bodyColor: adjustForPalette(big ? theme.rivalBig : theme.rivalSmall, big ? 'rivalBig' : 'rivalSmall', palette),
             bellyColor: theme.snakeBelly,
@@ -1298,7 +1747,7 @@ export function createRenderer(opts) {
     playEvent(event) {
       if (!world || !event) return;
       const settings = readSettings();
-      const countScale = QUALITY_TIERS[qualityTier].particleScale * (settings.reducedMotion ? 0.5 : 1);
+      const countScale = PARTICLE_SCALE[gq.particles] * (settings.reducedMotion ? 0.5 : 1);
       const cellV = (cell) => cellToWorldV(cell.x, cell.y, _v3);
 
       switch (event.type) {
@@ -1412,17 +1861,47 @@ export function createRenderer(opts) {
       };
     },
 
-    setQuality(tier) {
-      if (!QUALITY_TIERS[tier] || tier === qualityTier) return;
-      qualityTier = tier;
+    /** Apply saved graphics settings live: { preset, render_scale, adaptive, show_fps, <category> }. */
+    setGraphics(saved) {
+      const prev = gq;
+      gq = resolve(saved || {}, detected);
+      const rebuild = prev.foliage !== gq.foliage || prev.detail !== gq.detail || prev.particles !== gq.particles;
+      applyShadowSize();
+      markMaterialsDirty(); // shadow-map state is baked into programs
+      if (needsAddons()) loadAddons();
+      applyEnvironment();
+      adaptiveScale = 1;
+      frameTimes.length = 0;
+      postKey = null;
+      showFpsMeter(gq.showFps);
+      if (typeof document !== 'undefined') {
+        document.body.dataset.gfxPreset = gq.preset;
+        canvas.dataset.gfxPreset = gq.preset;
+      }
       api.resize();
-      applyQualityFlags();
-      if (config && theme) {
+      if (rebuild && config && theme) {
         const keepState = lastState;
-        buildScene(config, theme); // rebuild instanced decor at new density
+        buildScene(config, theme); // rebuild instanced decor at new density/detail
         if (keepState) api.syncSnapshot(keepState, 1);
       }
     },
+
+    /** Kept for callers of the old API: a bare preset name. */
+    setQuality(tier) { api.setGraphics({ preset: tier }); },
+
+    /** What the Graphics panel shows: GPU, auto choice, resolved tiers, pixels, frame rate. */
+    graphicsInfo() {
+      return {
+        gpu, detected, resolved: gq,
+        pixels: [Math.round(sizeW * pixelRatio), Math.round(sizeH * pixelRatio)],
+        fps: Math.round(fps), adaptiveScale: Math.round(adaptiveScale * 100) / 100,
+        postFailed, postActive: !!composer,
+      };
+    },
+
+    /** Settings panel hook: called when post-processing availability changes. */
+    onGraphicsChange: null,
+    _notify() { if (api.onGraphicsChange) api.onGraphicsChange(); },
 
     setTheme(th) {
       if (!config) { theme = th; return; }
@@ -1437,10 +1916,12 @@ export function createRenderer(opts) {
     resize() {
       const w = canvas.clientWidth || canvas.width || 1;
       const h = canvas.clientHeight || canvas.height || 1;
-      const dprCap = QUALITY_TIERS[qualityTier].dpr;
-      const dpr = Math.min(typeof devicePixelRatio === 'number' ? devicePixelRatio : 1, dprCap);
-      renderer.setPixelRatio(dpr);
+      const dpr = Math.min(typeof devicePixelRatio === 'number' ? devicePixelRatio : 1, gq.dprCap);
+      pixelRatio = Math.min(3, Math.max(0.3, dpr * gq.scale * adaptiveScale));
+      sizeW = w; sizeH = h;
+      renderer.setPixelRatio(pixelRatio);
       renderer.setSize(w, h, false);
+      // The post chain is keyed on size + ratio and rebuilds on the next frame.
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       if (world) applyThemeToLights(); // refresh fog distances for new framing
@@ -1451,7 +1932,7 @@ export function createRenderer(opts) {
       const wasHidden = hidden;
       hidden = false;
       renderer.compile(scene, camera);
-      renderer.render(scene, camera); // one full frame: shadow map + programs
+      draw(0.016); // one full frame: shadow map + programs (+ post chain)
       hidden = wasHidden;
     },
 
@@ -1468,23 +1949,13 @@ export function createRenderer(opts) {
       canvas.removeEventListener('webglcontextrestored', onContextRestored);
       disposeWorld();
       if (SerpentView.blobMaterial) { SerpentView.blobMaterial.dispose(); SerpentView.blobMaterial = null; }
+      disposePost();
+      if (envTexture) envTexture.dispose();
       keyLight.dispose();
       hemiLight.dispose();
       renderer.dispose();
     },
   };
-
-  function applyQualityFlags() {
-    const tier = QUALITY_TIERS[qualityTier];
-    renderer.shadowMap.enabled = tier.shadows;
-    keyLight.castShadow = tier.shadows;
-    scene.traverse((o) => {
-      if (o.material) {
-        const mats = Array.isArray(o.material) ? o.material : [o.material];
-        for (const m of mats) m.needsUpdate = true;
-      }
-    });
-  }
 
   return api;
 }

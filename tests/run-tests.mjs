@@ -10,6 +10,10 @@ import {
 import { hashString, seedFromString } from '../js/rng.js';
 import { validateScoreClaim } from '../server.js';
 import { zipStore, unzipFirstEntry, bytesToBase64, base64ToBytes } from '../js/platform.js';
+import {
+  detectPreset, resolve, presetTier, choosePreset, describe, normalizePreset, CATEGORIES, PRESETS,
+} from '../js/gfx.js';
+import { GFX_STRINGS, pickLocale, gfxStrings } from '../js/gfx-strings.js';
 
 let passed = 0, failed = 0;
 const failures = [];
@@ -427,6 +431,69 @@ test('golden hashes: pinned deterministic outcomes', () => {
   const rd = runReplay(toRulesConfig(d), []);
   eq(rd.finalHash, GOLDEN.daily, 'daily golden hash');
   eq(contentHash(), GOLDEN.content, 'content fingerprint');
+});
+
+// --- Graphics quality model (js/gfx.js) ---------------------------------------
+
+test('gfx: detectPreset maps GPU strings to presets', () => {
+  eq(detectPreset('ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)'), 'low');
+  eq(detectPreset('llvmpipe (LLVM 15.0.7, 256 bits)'), 'low');
+  eq(detectPreset('ANGLE (NVIDIA, NVIDIA GeForce RTX 3070 Direct3D11 vs_5_0 ps_5_0, D3D11)'), 'high');
+  eq(detectPreset('Apple M2'), 'high');
+  eq(detectPreset('ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)'), 'balanced');
+  eq(detectPreset('Adreno (TM) 650'), 'balanced');
+  eq(detectPreset(''), 'balanced');
+  eq(detectPreset('Apple M2', { mobile: true }), 'balanced', 'mobile Auto caps at Balanced');
+});
+
+test('gfx: resolve uses the detected preset for Auto and honours overrides', () => {
+  const auto = resolve({}, 'low');
+  eq([auto.preset, auto.auto, auto.shadows, auto.post], ['low', true, 'off', false]);
+  const high = resolve({ preset: 'high' }, 'low');
+  eq([high.preset, high.auto, high.shadows, high.ao, high.antialias, high.post], ['high', false, 'medium', 'on', 'smaa', true]);
+  const over = resolve({ preset: 'high', bloom: 'off', shadows: 'high', foliage: 'bogus' }, 'low');
+  eq([over.bloom, over.shadows, over.foliage], ['off', 'high', 'dense'], 'valid overrides win, invalid ones fall back');
+  eq(resolve({ preset: 'medium' }, 'low').preset, 'balanced', 'old "medium" maps to Balanced');
+  eq(normalizePreset('weird'), 'auto');
+});
+
+test('gfx: render scale is clamped to 50–200% and multiplies the preset scale', () => {
+  eq(resolve({ preset: 'high', render_scale: 5 }, 'low').scale, 2);
+  eq(resolve({ preset: 'high', render_scale: 0.1 }, 'low').scale, 0.5);
+  eq(resolve({ preset: 'ultra', render_scale: 1 }, 'low').scale, 1.25);
+  eq(resolve({ preset: 'low' }, 'low').dprCap, 1, 'Low caps the pixel ratio at 1');
+  eq([resolve({}, 'low').adaptive, resolve({ adaptive: false }, 'low').adaptive, resolve({ show_fps: true }, 'low').showFps], [true, false, true]);
+});
+
+test('gfx: choosing a preset clears overrides but keeps scale/adaptive/fps', () => {
+  const next = choosePreset({ preset: 'high', bloom: 'off', ao: 'high', render_scale: 1.5, adaptive: false, show_fps: true }, 'low');
+  eq(next, { preset: 'low', render_scale: 1.5, adaptive: false, show_fps: true });
+  for (const cat of Object.keys(CATEGORIES)) ok(next[cat] === undefined, cat + ' cleared');
+});
+
+test('gfx: every preset defines every category with a valid tier; describe summarizes', () => {
+  for (const p of PRESETS) {
+    for (const [cat, tiers] of Object.entries(CATEGORIES)) ok(tiers.includes(presetTier(p, cat)), `${p}.${cat}`);
+  }
+  const d = describe(resolve({ preset: 'high' }, 'low'), [1280, 800]);
+  ok(/2048² shadows/.test(d) && /SMAA/.test(d) && /1280×800 px/.test(d), d);
+  ok(/no shadows/.test(describe(resolve({ preset: 'low' }, 'low'))), 'low summary');
+});
+
+test('gfx: panel strings exist for every required locale', () => {
+  const need = ['en-US', 'en-GB', 'es-419', 'es-ES', 'de-DE', 'fr-FR', 'fr-CA', 'pt-BR', 'it-IT'];
+  const ref = GFX_STRINGS['en-US'];
+  const keysOf = (o, pre = '') => Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' ? keysOf(v, pre + k + '.') : [pre + k]));
+  const refKeys = keysOf(ref).sort();
+  for (const loc of need) {
+    ok(GFX_STRINGS[loc], 'missing locale ' + loc);
+    eq(keysOf(GFX_STRINGS[loc]).sort(), refKeys, loc + ' keys');
+    for (const cat of Object.keys(CATEGORIES)) ok(GFX_STRINGS[loc].cat[cat], `${loc} cat.${cat}`);
+    for (const tiers of Object.values(CATEGORIES)) for (const t of tiers) ok(GFX_STRINGS[loc].tier[t], `${loc} tier.${t}`);
+  }
+  eq([pickLocale('de'), pickLocale('fr-CA'), pickLocale('es-MX'), pickLocale('es-ES'), pickLocale('en-AU'), pickLocale('ja-JP')],
+    ['de-DE', 'fr-CA', 'es-419', 'es-ES', 'en-GB', 'en-US']);
+  eq(gfxStrings('pt-BR').title, 'Gráficos');
 });
 
 // Golden values are filled by tests/record-golden.mjs and must only change
