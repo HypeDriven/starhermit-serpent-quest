@@ -22,6 +22,7 @@ import { normalizePreset } from './gfx.js';
 import { createAudio } from './audio.js';
 import { createUI } from './ui.js';
 import { createPlatform } from './platform.js';
+import { shText } from './sh-strings.js';
 
 // ---------------------------------------------------------------------------
 // Static declarations
@@ -123,9 +124,6 @@ async function boot() {
   ui.setLoading(70, 'Opening the gates…');
   ui.wireStatic(settings);
   wireGlobalInput();
-  platform.syncTime();
-  platform.activityStart();
-  window.addEventListener('beforeunload', () => platform.activityEnd());
   window.addEventListener('pagehide', () => platform.cloudSync.flush());
   initHostedState();
 
@@ -135,7 +133,6 @@ async function boot() {
   ui.showChrome(true);
   updateDailyChip();
   ui.finishLoading();
-  telemetry('start');
   goTitle();
   requestAnimationFrame(frame);
 }
@@ -149,10 +146,6 @@ function webglAvailable() {
 
 function nextFrame() { return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); }
 
-function telemetry(event, data) {
-  platform.telemetry(event, data, settings.telemetryConsent);
-}
-
 // ---------------------------------------------------------------------------
 // Hosted state: cloud save mirror + account display name
 // ---------------------------------------------------------------------------
@@ -160,7 +153,21 @@ function telemetry(event, data) {
 // Remote-preferred load: the platform slot wins on conflict; localStorage
 // remains the offline cache either way.
 async function initHostedState() {
+  platform.onAuth((signedIn) => {
+    if (!signedIn) ui.toast(shText('signedOut'));
+    ui.updateTopbar(topbarVM());
+    if (ui.activeScreen === 'title') goTitle();
+  });
   if (!platform.hosted) return;
+  // Per-player settings and key bindings on StarHermit win over this device's copy.
+  if (await platform.loadSettings(settings)) {
+    ui.applySettings(settings);
+    audio.applySettings();
+    applyGraphics();
+  }
+  settings.bindings = await platform.loadBindings(settings.bindings);
+  saveSettings(settings);
+  platform.avatarUrl().then((url) => { if (url) ui.setAvatar(url); });
   platform.cloudSync.onStatus(() => {
     if (ui.activeScreen === 'profile') showProfile();
   });
@@ -251,6 +258,8 @@ function goTitle() {
     dailyLabel: dailyLabel(),
     snapshot: snap ? { label: snapshotLabel(snap) } : null,
     progressText: `Journey: ${cleared} / ${JOURNEY_STAGES.length} stages cleared · Mastery ${progression.masteryPoints} · ${profile.displayName}`,
+    signedIn: platform.hosted,
+    canSignIn: platform.canSignIn(),
   });
   ui.setHudVisible(false);
   ui.updateRails(null);
@@ -584,7 +593,6 @@ function startRound(flow) {
   audio.unlock();
   audio.startAmbience(themeById(desc.themeId).ambience);
   audio.startMusic(flow.mode === 'practice' ? 0.3 : 0.55);
-  platform.presenceStart(() => 'playing');
   session.start(settings.reducedMotion ? 1.2 : 3);
 }
 
@@ -753,7 +761,6 @@ function onResolved(results) {
     results.lessonPassed = passed;
     if (passed) {
       progression.tutorials[t.id] = { done: true };
-      telemetry('tutorial-step', { id: t.id, done: true });
       const allDone = TUTORIALS.every((x) => progression.tutorials[x.id]?.done);
       if (allDone && unlockAchievement('mechanic-mastery')) newlyUnlocked.push(ACHIEVEMENTS[1]);
     }
@@ -772,7 +779,6 @@ function onResolved(results) {
       progression.dailiesPlayed[day] = { score: results.score.total, won: results.won };
       if (progression.currentStreakDays >= 3 && unlockAchievement('daily-streak-3')) newlyUnlocked.push(ACHIEVEMENTS[2]);
     }
-    if (flow.ranked) submitDailyScore(results);
   }
 
   if (flow.mode === 'chase' && flow.ranked) {
@@ -796,7 +802,6 @@ function onResolved(results) {
   saveBoards(boards);
   syncCloudSave();
   clearSnapshot();
-  telemetry('round-end', { mode: flow.mode, won: results.won, score: results.score.total });
 
   setTimeout(() => showResults(results, { newlyUnlocked }), settings.reducedMotion ? 300 : 1100);
 }
@@ -813,24 +818,6 @@ function unlockAchievement(key) {
   if (progression.achievements[key]) return false;
   progression.achievements[key] = { at: Date.now() };
   return true;
-}
-
-async function submitDailyScore(results) {
-  if (platform.hosted) return; // platform boards are script-owned/read-only; the daily best is a cloud-synced personal record
-  const flow = currentFlow || {};
-  const payload = {
-    contentVersion: 1, rulesetId: results.rulesetId, seed: results.seed,
-    day: flow.descriptor?.day, sessionId: results.sessionId,
-    settings: { tickScale: settings.timingAssist ? 1.25 : 1 },
-    inputLog: results.replay.commands, score: results.score,
-    checksum: results.replay.result.finalHash, durationMs: results.elapsedMs,
-  };
-  try {
-    const res = await platform.submitScore(payload);
-    if (res.casual) ui.toast('Offline — score saved locally (casual board).');
-  } catch (e) {
-    ui.toast(e.code === 'rate-limited' ? 'Score submission rate-limited; saved locally.' : 'Score saved locally; will submit when online.');
-  }
 }
 
 function showResults(results, extra = {}) {
@@ -1018,11 +1005,9 @@ function wireGlobalInput() {
       if (session && (session.phase === 'active' || session.phase === 'countdown') && !session.paused) session.pause('background');
       audio.setDucked(true);
       renderer.setHidden(true);
-      platform.presenceStop();
     } else {
       audio.setDucked(false);
       renderer.setHidden(false);
-      if (session) platform.presenceStart(() => 'playing');
       if (pausedByBackground && session) {
         pausedByBackground = false;
         const s = session.state;
@@ -1040,9 +1025,6 @@ function wireGlobalInput() {
     resizeTimer = setTimeout(() => renderer.resize(), 80);
   });
   window.addEventListener('orientationchange', () => setTimeout(() => renderer.resize(), 120));
-
-  window.addEventListener('error', (e) => telemetry('error', { category: String(e.message).slice(0, 40) }));
-  window.addEventListener('unhandledrejection', () => telemetry('error', { category: 'unhandled-rejection' }));
 }
 
 function pollGamepad() {
@@ -1132,6 +1114,15 @@ function noteLessonAction() {
 function onAction(name, payload = {}) {
   (window.__actions = window.__actions || []).push(name + '@' + Math.round(performance.now()));
   switch (name) {
+    case 'sign-in': platform.signIn(); break;
+    case 'invite': {
+      const url = platform.inviteLink();
+      if (!url) break;
+      navigator.clipboard.writeText(url)
+        .then(() => ui.toast(shText('inviteCopied')))
+        .catch(() => ui.toast(shText('inviteLink', { url })));
+      break;
+    }
     case 'quick-play': {
       const next = JOURNEY_STAGES.find((st, i) =>
         !progression.stages[st.id]?.won && (i === 0 || progression.stages[JOURNEY_STAGES[i - 1].id]?.won));
@@ -1182,14 +1173,12 @@ function onAction(name, payload = {}) {
     case 'resume': if (session) { session.resume(); ui.showPause(false); } break;
     case 'restart':
       if (currentFlow?.mode === 'replay' && replaySource?.originalFlow) {
-        telemetry('retry', { mode: replaySource.originalFlow.mode });
         startRound(replaySource.originalFlow);
       } else if (currentFlow) {
-        telemetry('retry', { mode: currentFlow.mode });
         startRound({ ...currentFlow, replay: null });
       }
       break;
-    case 'quit': stopSession(); clearSnapshot(); audio.stopMusic(); audio.stopAmbience(); platform.presenceStop(); goTitle(); break;
+    case 'quit': stopSession(); clearSnapshot(); audio.stopMusic(); audio.stopAmbience(); goTitle(); break;
     case 'undo': doUndo(); break;
     case 'hint': doHint(); break;
     case 'next-stage': {
@@ -1210,10 +1199,10 @@ function onAction(name, payload = {}) {
     case 'settings-changed': {
       Object.assign(settings, payload.settings);
       saveSettings(settings);
+      platform.mirrorSettings(settings);
       ui.applySettings(settings);
       audio.applySettings();
       applyGraphics();
-      telemetry('settings-change', {});
       break;
     }
     case 'rebind': {
@@ -1221,6 +1210,7 @@ function onAction(name, payload = {}) {
       if (!keys.includes(payload.key)) keys[0] = payload.key;
       settings.bindings[payload.action] = keys;
       saveSettings(settings);
+      platform.saveBinding(payload.action, keys);
       showNavScreen('settings');
       ui.toast(`Bound ${payload.action} to ${payload.key.replace('Arrow', '')}.`);
       break;
@@ -1327,7 +1317,6 @@ function resumeSnapshot() {
     ui.toast('Round restored from your last safe snapshot.');
   } catch (err) {
     console.warn('snapshot restore failed:', err);
-    telemetry('error', { category: 'snapshot-restore' });
     clearSnapshot();
     ui.toast('That snapshot could not be restored.', 'warn');
     goTitle();

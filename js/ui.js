@@ -6,6 +6,7 @@
 import { THEMES } from './content.js';
 import { PRESETS, CATEGORIES, presetTier, describe, choosePreset, normalizePreset } from './gfx.js';
 import { gfxStrings, fmt } from './gfx-strings.js';
+import { shText } from './sh-strings.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -419,8 +420,7 @@ export function createUI({ onAction }) {
         toggle('leftHanded', 'Left-handed controls'),
         toggle('haptics', 'Haptics (vibration)'),
         toggle('captions', 'Sound captions', 'Text cues for meaningful audio.'),
-        toggle('timingAssist', 'Timing assistance', 'Slightly slower serpent. Rounds become unranked.'),
-        toggle('telemetryConsent', 'Anonymous usage statistics', 'Start, tutorial, round-end, and error events only.')),
+        toggle('timingAssist', 'Timing assistance', 'Slightly slower serpent. Rounds become unranked.')),
       el('div', { class: 'card' }, el('h2', { text: 'Keyboard bindings' }),
         ...Object.entries(s.bindings).map(([action, keys]) =>
           el('div', { class: 'bind-row' },
@@ -468,6 +468,8 @@ export function createUI({ onAction }) {
           el('button', { class: 'btn', type: 'button', onclick: () => onAction('daily-play') }, vm.dailyLabel || 'Daily challenge'),
           el('button', { class: 'btn', type: 'button', onclick: () => onAction('nav-progression') }, 'Journey & achievements'),
           el('button', { class: 'btn', type: 'button', onclick: () => onAction('nav-boards') }, 'Leaderboards'),
+          vm.signedIn ? el('button', { class: 'btn ghost', type: 'button', id: 'btn-invite', onclick: () => onAction('invite') }, shText('invite')) : null,
+          vm.canSignIn && !vm.signedIn ? el('button', { class: 'btn ghost', type: 'button', id: 'btn-signin', onclick: () => onAction('sign-in') }, shText('signIn')) : null,
         ),
         el('p', { class: 'muted', text: vm.progressText || '' }),
       );
@@ -742,9 +744,15 @@ export function createUI({ onAction }) {
       `head at column ${head.x + 1}, row ${head.y + 1}. Food: ${food || 'none'}. ${threats ? 'Threats: ' + threats : 'No hunters.'}`;
   }
 
+  let avatarUrl = null; // account avatar (StarHermit), shown in the profile chip
+  function setAvatar(url) {
+    avatarUrl = url;
+    $('#chip-avatar').style.background = `center / cover no-repeat url("${url}")`;
+  }
+
   function updateTopbar(vm) {
     $('#chip-name').textContent = vm.profileName;
-    $('#chip-avatar').style.background = vm.avatarColor || 'var(--accent)';
+    $('#chip-avatar').style.background = avatarUrl ? `center / cover no-repeat url("${avatarUrl}")` : (vm.avatarColor || 'var(--accent)');
     $('#chip-daily').textContent = vm.dailyText;
   }
 
@@ -758,6 +766,7 @@ export function createUI({ onAction }) {
   }
 
   return {
+    setAvatar,
     showScreen, closeScreen, get activeScreen() { return activeScreen; },
     setHudVisible, updateHUD, updateRails,
     announce, toast, caption, countdown,

@@ -56,7 +56,6 @@ export const DEFAULT_SETTINGS = {
     undo: ['KeyZ', 'Backspace'], hint: ['KeyH'], cameraReset: ['KeyC'],
   },
   tutorialDone: {},
-  telemetryConsent: false,
 };
 
 export function loadSettings() {

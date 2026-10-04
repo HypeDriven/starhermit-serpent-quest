@@ -4,3 +4,13 @@ launch=index.html
 owner=2712e04e-461b-4d23-81ae-e40b429128a8
 server=server.js
 cover=cover.jpg
+
+# Keyboard actions (KeyboardEvent.code; remappable in Settings and via the platform controls API).
+control.up=ArrowUp+KeyW | Steer up
+control.down=ArrowDown+KeyS | Steer down
+control.left=ArrowLeft+KeyA | Steer left
+control.right=ArrowRight+KeyD | Steer right
+control.pause=Escape+KeyP | Pause / back
+control.undo=KeyZ+Backspace | Undo (practice)
+control.hint=KeyH | Hint
+control.camera_reset=KeyC | Reset camera

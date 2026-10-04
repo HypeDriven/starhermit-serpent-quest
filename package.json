@@ -1,11 +1,11 @@
 {
   "name": "serpent-quest",
   "version": "1.0.0",
-  "description": "Serpent Quest — steer a growing serpent through colorful garden arenas.",
+  "description": "Serpent Quest \u2014 steer a growing serpent through colorful garden arenas.",
   "type": "module",
   "private": true,
   "scripts": {
-    "test": "node tests/run-tests.mjs",
+    "test": "node tests/run-tests.mjs && node --test tests/platform.test.mjs",
     "record-golden": "node tests/record-golden.mjs",
     "serve": "python3 -m http.server 8080",
     "server": "node server.js 8787",

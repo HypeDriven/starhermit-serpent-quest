@@ -9,7 +9,6 @@ import {
 } from '../js/content.js';
 import { hashString, seedFromString } from '../js/rng.js';
 import { validateScoreClaim } from '../server.js';
-import { zipStore, unzipFirstEntry, bytesToBase64, base64ToBytes } from '../js/platform.js';
 import {
   detectPreset, resolve, presetTier, choosePreset, describe, normalizePreset, CATEGORIES, PRESETS,
 } from '../js/gfx.js';
@@ -357,24 +356,7 @@ test('server score validation reaches seed check for a real day', () => {
   eq(r.error, 'seed-mismatch'); // valid day, wrong seed
 });
 
-// --- Cloud-save zip helper (stored entries, CRC32) ---------------------------
-
-test('cloud-save zip helper writes a strict-reader-compatible stored zip', () => {
-  const doc = {
-    version: 1, savedAt: 1720000000000,
-    progression: { stages: { j01: { won: true, bestScore: 420 } }, totalRounds: 3 },
-    boards: { daily: {}, chase: [], challenges: {} },
-  };
-  const bytes = zipStore('save.json', new TextEncoder().encode(JSON.stringify(doc)));
-  eq([bytes[0], bytes[1]], [0x50, 0x4b], 'PK magic');
-  const back = JSON.parse(new TextDecoder().decode(unzipFirstEntry(bytes)));
-  eq(back, doc, 'zip round-trips the save doc');
-  const b64 = bytesToBase64(bytes);
-  eq(base64ToBytes(b64).length, bytes.length, 'base64 preserves byte length');
-  // EOCD central-directory offset points at the central header.
-  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  eq(dv.getUint32(bytes.length - 6, true) <= bytes.length, true, 'cd offset in range');
-});
+// Cloud-save zipping lives in the StarHermit SDK; tests/platform.test.mjs covers the round trip.
 
 test('journey stages instantiate and simulate without errors', () => {
   for (const st of JOURNEY_STAGES) {

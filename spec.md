@@ -170,7 +170,7 @@ The Settings screen's **Graphics** section offers: Quality (Auto — chosen from
 - `ui`: responsive DOM shell, focus, localization, settings, overlays, accessibility mirror.
 - `audio`: buses, event mapping, focus/background behavior, decode and memory policy.
 - `content`: versioned levels, themes, tutorials, validation metadata.
-- `platform`: launch-token (fragment, read once + stripped) auth with Bearer on every call and 45-min re-mint, profile/leaderboard reads, cloud-save mirror, retries, rate-limit handling; localhost-only dev telemetry hooks.
+- `platform`: launch-token (fragment, read once + stripped) auth with Bearer on every call and 45-min re-mint, profile/leaderboard reads, cloud-save mirror, retries, rate-limit handling. It never calls the game's own server routes.
 
 No module may mutate rules state except through a validated command. Rendering consumes immutable snapshots plus interpolation data. UI state and simulation state are separate so closing a drawer cannot affect a match.
 
@@ -193,22 +193,24 @@ No module may mutate rules state except through a validated command. Rendering c
 
 ### Packaging and launch
 - Ship a browser distribution with `starhermit.txt` at its root, `name=Serpent Quest`, and `launch=index.html`. Keep source files, secrets, design documents, and source maps outside the uploaded distribution.
-- Read the game scope from the short-lived launch token (`#game_token=` fragment, stripped after the one-time read; query params are a localhost dev fallback) rather than hard-coding a slug. Use same-origin `/api` routes when hosted. Re-mint the launch token via `POST /api/v1/games/{slug}/launch-token` every 45 minutes; never persist access or launch tokens in local storage.
-- Daily boundaries use local time on-platform; the localhost dev server additionally offers `GET /api/v1/time` for round-trip-adjusted sync. Treat rate limits and structured `{"error":"..."}` responses as recoverable UI states.
+- All platform access goes through the canonical StarHermit SDK (`starhermit-sdk.js`, an unedited copy of `tools/starhermit-sdk.js`, loaded before the modules) wrapped by `js/platform.js`. `StarHermit.init()` runs when the adapter is created at module load: it reads the launch token from `#game_token=` or `#access_token=`, strips it, takes the slug from `game_scope`, keeps the token in memory and renews it. If renewal is refused the game keeps playing locally and the title offers sign-in again.
+- On `*.starhermit.com` without a token the title shows **Sign in with StarHermit**; it is hidden when signed in and when running locally. Standalone play makes no platform calls.
+- Daily boundaries use the local clock. The client makes no own-server calls (no `/api/v1/time`, activity, presence, telemetry or score submission), so a standalone load on any static host — localhost included — makes no `/api` or `/ws` requests.
 
 ### Identity, profile, presence, and preferences
-- Support guest practice locally, then offer account sign-in for durable progress. Hosted display name is the account nickname from `GET /api/v1/users/{id}/profile` (never `/api/v1/me`, never usernames; "Player "+id prefix fallback); local guests keep the editable display name. Honor profile privacy — presence is host-owned chrome, so the game sends no presence itself.
-- Store accessibility, audio, graphics tier, tutorial completion, camera preference, and rules options through per-game settings. Declare desktop action bindings and read player overrides; touch mappings remain responsive UI controls.
-- Cloud-save progression as a versioned, checksummed document, mirrored to the platform slot (`GET`/`PUT /api/v1/me/cloud-saves/{slug}`, zip+base64, ~2 s debounce + pagehide flush, remote-preferred on conflict). localStorage stays the offline cache. Never place credentials or private chat in saves.
+- Signed in, the profile chip and title show the account nickname (`StarHermit.profile()`, "Player <id>" fallback) and the chip shows the account avatar; local guests keep the editable display name. Presence is host-owned chrome.
+- Player preferences (audio, graphics preset and overrides, accessibility, left-handed layout, hold-to-pause, timing assist, haptics, captions, camera view, theme and similar keys) mirror to the per-game settings KV: applied from `getSettings()` at start (platform wins) and patched (changed keys only, debounced) on every change.
+- Keyboard actions are declared as `control.*` lines in `starhermit.txt`; keydown is routed by `event.code` through the bindings resolved by `StarHermit.loadBindings()`. Settings → Keyboard bindings rebinds an action locally and, when signed in, with `setControl`; Help lists the effective keys. Touch steering stays responsive UI.
+- Progression and personal boards are cloud-saved as one versioned document in the `game:<slug>` slot: `loadJSON()` remote-first at start, `saveJSON()` debounced ~2 s, `flushSave(true)` on `pagehide`/hide, with a visible sync status. localStorage stays the offline cache. Never place credentials or private chat in saves.
 
 ### Discovery, activity, and social layer
 - Activity start/end and friends lists are host-owned chrome; the game calls neither on-platform. Surface entitlement or catalog state only in host-owned chrome; the game itself must remain playable without promotional interruption.
-- Offer score comparison through a friends-filtered read of the platform leaderboard (`friendsOnly`) plus nicknames resolved via the profile helper. Respect presence visibility and do not expose a hidden or private profile through game UI.
+- Offer score comparison through a friends-filtered read of the platform leaderboard (`leaderboardEntries` with `scope=friends`) plus profile nicknames. When signed in, the title shows **Invite a friend**, which copies `StarHermit.inviteLink()` with a confirmation toast. Respect presence visibility and do not expose a hidden or private profile through game UI.
 - Do not create gameplay chat or voice surfaces for the initial release; they are not relevant to the core solo loop. Friends-only leaderboard filtering and shareable challenge seeds supply the social layer without unnecessary communication permissions.
 
 ### Achievements and leaderboards
 - Declare a small static achievement set: first completion, mechanic mastery, a sustained streak, a difficult content milestone, and an accessibility-neutral long-term goal. Keys are stable, lowercase identifiers; unlocks are idempotent.
-- Provide global and friends-filtered board READS via `GET /api/v1/leaderboards/{leaderboardId}/entries`; clients can never submit scores, and personal bests stay local + cloud-saved. On localhost, the dev script validates daily claims (ruleset, content version, seed, assists, duration, replay checksum) and rejects impossible or stale-version scores; when validation is unavailable the board is labeled casual.
+- Provide global and friends-filtered board READS via the SDK (`getGame()`/`leaderboards()` → `leaderboardEntries()`); clients can never submit scores, and personal bests stay local + cloud-saved. Standalone daily results go only to the local board, which is labeled casual (not server-validated).
 - Achievements stay local (part of the cloud-saved progression doc); a pure browser game has no server-authoritative unlock path, and the client never calls achievement-unlock endpoints.
 
 ### Sessions and transport
@@ -219,7 +221,7 @@ No module may mutate rules state except through a validated command. Rendering c
 ### Publishing and operations
 - Keep the authoritative script inside the distribution and declare it with `server=server.js`. Choose a digest-pinned container only if profiling proves the sandbox unsuitable; no initial design here requires one.
 - Define control defaults, achievement metadata, and versioned settings before release. Publish immutable build assets, verify the launch path, maintain migration tests for saves, and expose no secret configuration to the client.
-- Capture anonymous funnel events only for start, tutorial step, round end, retry, settings change, and error category. Avoid raw text, precise personal data, and cross-title tracking.
+- No per-game telemetry is sent (there is no platform endpoint for it).
 
 ## 7. Content, economy, and retention
 
