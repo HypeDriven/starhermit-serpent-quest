@@ -50,7 +50,8 @@ export function createUI({ onAction }) {
 
   const topbar = document.getElementById('topbar');
   const syncTopbarInset = () => {
-    const h = topbar && !topbar.hidden ? topbar.getBoundingClientRect().height : 0;
+    // visual px → layout px of the zoomed #screens layer (large screens)
+    const h = topbar && !topbar.hidden ? topbar.getBoundingClientRect().height / (window.UIScale?.value || 1) : 0;
     screensRoot.style.setProperty('--topbar-h', `${Math.round(h)}px`);
   };
   if (topbar && typeof ResizeObserver === 'function') new ResizeObserver(syncTopbarInset).observe(topbar);
@@ -201,8 +202,13 @@ export function createUI({ onAction }) {
 
   function toast(msg, kind = '') {
     const t = $('#toast');
+    // Over a menu screen (or with the HUD hidden, e.g. the title's invite link) the HUD toast
+    // would be hidden or covered: float it above the screens instead.
+    const floating = $('#hud').hidden || !!document.querySelector('#screens .screen.active');
+    if (floating && t.parentElement !== document.body) document.body.append(t);
+    else if (!floating && t.parentElement === document.body) $('#hud').append(t);
     t.textContent = msg;
-    t.className = kind;
+    t.className = (kind + (floating ? ' floating' : '')).trim();
     t.hidden = false;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { t.hidden = true; }, 2600);

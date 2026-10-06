@@ -1118,7 +1118,7 @@ function onAction(name, payload = {}) {
     case 'invite': {
       const url = platform.inviteLink();
       if (!url) break;
-      navigator.clipboard.writeText(url)
+      (navigator.clipboard?.writeText ? navigator.clipboard.writeText(url) : Promise.reject(new Error('no clipboard')))
         .then(() => ui.toast(shText('inviteCopied')))
         .catch(() => ui.toast(shText('inviteLink', { url })));
       break;

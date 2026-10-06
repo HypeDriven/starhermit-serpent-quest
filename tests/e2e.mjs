@@ -472,7 +472,7 @@ async function runGraphicsPass(browser, name, ctxOpts) {
     errors.push(`console ${m.type()}: ${m.text()}`);
   });
   watchOwnServer(page, errors);
-  const vw = ctxOpts.viewport.width;
+  const vw = page.viewportSize().width; // the real viewport (runners may swap ctxOpts)
   const openGraphics = async () => {
     await page.waitForSelector('#screen-title.active', { timeout: 15000 });
     await page.locator('#btn-settings-top').click();
