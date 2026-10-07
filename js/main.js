@@ -743,6 +743,7 @@ function onResolved(results) {
     return;
   }
   flow.lastResults = results;
+  flow.lbText = null;
 
   progression.totalRounds += 1;
   const newlyUnlocked = [];
@@ -792,6 +793,15 @@ function onResolved(results) {
   }
 
   if (flow.mode === 'chase' && flow.ranked) {
+    // signed in: the run's total goes to the platform high-score board
+    if (platform.hosted) {
+      flow.lbText = shText('lbPosting');
+      platform.submitScore(results.score.total).then((r) => {
+        flow.lbText = !r.posted ? shText('lbNotPosted') : r.rank ? shText('lbRank', { rank: r.rank }) : shText('lbPosted');
+        const line = document.getElementById('results-lb');
+        if (line && currentFlow === flow) line.textContent = flow.lbText;
+      });
+    }
     const entry = boardEntryFromResults(results, profile.displayName, true);
     boards.chase = boards.chase || [];
     boards.chase.push(entry);
@@ -864,6 +874,7 @@ function showResults(results, extra = {}) {
     progressText: `Rounds played: ${progression.totalRounds} · Mastery ${progression.masteryPoints}`,
     nextAction, nextLabel,
     canReplay: !extra.isReplay && !!results.replay,
+    leaderboard: extra.isReplay ? null : flow.lbText || null,
   });
   ui.announce(`${headline}. Total score ${results.score.total}.`, true);
   if (extra.newlyUnlocked?.length) audio.play('achievement');

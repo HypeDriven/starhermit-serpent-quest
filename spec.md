@@ -171,7 +171,7 @@ The Settings screen's **Graphics** section offers: Quality (Auto — chosen from
 - `ui`: responsive DOM shell, focus, localization, settings, overlays, accessibility mirror.
 - `audio`: buses, event mapping, focus/background behavior, decode and memory policy.
 - `content`: versioned levels, themes, tutorials, validation metadata.
-- `platform`: launch-token (fragment, read once + stripped) auth with Bearer on every call and 45-min re-mint, profile/leaderboard reads, cloud-save mirror, retries, rate-limit handling. It never calls the game's own server routes.
+- `platform`: launch-token (fragment, read once + stripped) auth with Bearer on every call and 45-min re-mint, profile/leaderboard reads, the Score Chase score post, cloud-save mirror, retries, rate-limit handling. It never calls the game's own server routes.
 
 No module may mutate rules state except through a validated command. Rendering consumes immutable snapshots plus interpolation data. UI state and simulation state are separate so closing a drawer cannot affect a match.
 
@@ -211,7 +211,8 @@ No module may mutate rules state except through a validated command. Rendering c
 
 ### Achievements and leaderboards
 - Declare a small static achievement set: first completion, mechanic mastery, a sustained streak, a difficult content milestone, and an accessibility-neutral long-term goal. Keys are stable, lowercase identifiers; unlocks are idempotent.
-- Provide global and friends-filtered board READS via the SDK (`getGame()`/`leaderboards()` → `leaderboardEntries()`); clients can never submit scores, and personal bests stay local + cloud-saved. Standalone daily results go only to the local board, which is labeled casual (not server-validated).
+- Provide global and friends-filtered board READS via the SDK (`getGame()`/`leaderboards()` → `leaderboardEntries()`); personal bests stay local + cloud-saved.
+- Signed in, every finished ranked Score Chase run posts its total through `StarHermit.submitScores({ 'high-score': total })`; `score-script.js` posts it to the `high-score` board (integer, higher is better, 0–1,000,000). The results screen shows "Posting score to the leaderboard…", then "Leaderboard rank: #N" (or "Score posted to the leaderboard." / "Score not posted to the leaderboard."), localized in `js/sh-strings.js`. Other modes post nothing; standalone posts nothing and shows no line. Standalone daily results go only to the local board, which is labeled casual (not server-validated).
 - Achievements stay local (part of the cloud-saved progression doc); a pure browser game has no server-authoritative unlock path, and the client never calls achievement-unlock endpoints.
 
 ### Sessions and transport
@@ -220,7 +221,7 @@ No module may mutate rules state except through a validated command. Rendering c
 - Realtime rooms, peer relay, matchmaking, backfill, and voice are intentionally not used because they add no value to this ruleset.
 
 ### Publishing and operations
-- Keep the authoritative script inside the distribution and declare it with `server=server.js`. Choose a digest-pinned container only if profiling proves the sandbox unsuitable; no initial design here requires one.
+- The platform script is `score-script.js` (declared with `server=score-script.js`; canonical copy in the games repo's `tools/score-script.js`): it range-checks a Score Chase total sent through `StarHermit.submitScores` and posts it to the `high-score` board. `server.js` is the local dev server with the localhost-only daily/replay validation. Choose a digest-pinned container only if profiling proves the sandbox unsuitable; no initial design here requires one.
 - Define control defaults, achievement metadata, and versioned settings before release. Publish immutable build assets, verify the launch path, maintain migration tests for saves, and expose no secret configuration to the client.
 - No per-game telemetry is sent (there is no platform endpoint for it).
 

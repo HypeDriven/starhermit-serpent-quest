@@ -605,6 +605,7 @@ export function createUI({ onAction }) {
         inner.append(el('div', { class: 'card' }, el('h2', { text: 'Comparison' }),
           el('p', { text: vm.comparison })));
       }
+      if (vm.leaderboard) inner.append(el('p', { id: 'results-lb', 'aria-live': 'polite', text: vm.leaderboard }));
       if (vm.progressText) inner.append(el('p', { class: 'muted', text: vm.progressText }));
       inner.append(el('div', { class: 'btn-row' },
         el('button', { class: 'btn primary', type: 'button', 'data-autofocus': '1', onclick: () => onAction(vm.nextAction) }, vm.nextLabel),

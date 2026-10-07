@@ -77,6 +77,18 @@ export function createPlatform() {
     inviteLink() { return isHosted() ? sh.inviteLink() : null; },
     onAuth(cb) { authCb = cb; },
     async avatarUrl() { return isHosted() ? sh.avatarUrl().catch(() => null) : null; },
+    // Post a finished Score Chase run to the leaderboards (score-script.js);
+    // resolves { posted, rank } — rank on the high-score board, or null.
+    async submitScore(total) {
+      if (!isHosted() || typeof sh.submitScores !== 'function') return { posted: false, rank: null };
+      const keys = await sh.submitScores({ 'high-score': total }).catch(() => []);
+      if (!keys || !keys.includes('high-score')) return { posted: false, rank: null };
+      try {
+        const r = await sh.leaderboard('high-score', { pageSize: 100 });
+        const me = ((r && r.items) || []).find((i) => i.userId === sh.userId);
+        return { posted: true, rank: me ? me.rank : null };
+      } catch { return { posted: true, rank: null }; }
+    },
 
     // Per-player settings KV: platform values win at start; changes are patched.
     async loadSettings(settings) {
