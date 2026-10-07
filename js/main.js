@@ -159,6 +159,7 @@ async function initHostedState() {
     if (ui.activeScreen === 'title') goTitle();
   });
   if (!platform.hosted) return;
+  cloudReady = false; // hold cloud saves until the slot has been compared (below)
   // Per-player settings and key bindings on StarHermit win over this device's copy.
   if (await platform.loadSettings(settings)) {
     ui.applySettings(settings);
@@ -185,6 +186,9 @@ async function initHostedState() {
       saveBoards(boards);
     }
   } catch { /* local cache stays authoritative */ }
+  cloudReady = true;
+  // A save made while loading was held: push the state as it stands after adoption.
+  if (cloudSaveHeld) { cloudSaveHeld = false; syncCloudSave(); }
   // Nickname from the account profile (never /me, never usernames); rendered
   // in the topbar, title, and boards via profile.displayName.
   platform.fetchProfileName().then((name) => {
@@ -199,8 +203,14 @@ async function initHostedState() {
 
 // Cloud mirror of the local save doc: debounced by the adapter, flushed on
 // pagehide. No-op offline — localStorage is the cache there.
+// Signed in, nothing is mirrored until the start-up cloud load has been
+// compared: a save queued earlier would PUT the stale local doc over a newer
+// cloud save (debounce or pagehide flush). It is replayed after the load.
+let cloudReady = true;
+let cloudSaveHeld = false;
 function syncCloudSave() {
   if (!platform.hosted) return;
+  if (!cloudReady) { cloudSaveHeld = true; return; }
   platform.cloudSync.schedule({ version: 1, savedAt: Date.now(), progression, boards });
 }
 
