@@ -1510,9 +1510,9 @@ export function createRenderer(opts) {
     const key = postKeyFor();
     if (key !== postKey) { postKey = key; buildPost(); }
     if (composer) {
-      try { composer.render(dt); return; } catch (e) { postFailed = true; disposePost(); postKey = postKeyFor(); }
+      try { (globalThis.GameOptions ? globalThis.GameOptions.draw(composer.renderer, () => composer.render(dt)) : composer.render(dt)); return; } catch (e) { postFailed = true; disposePost(); postKey = postKeyFor(); }
     }
-    renderer.render(scene, camera);
+    (globalThis.GameOptions ? globalThis.GameOptions.draw(renderer, () => renderer.render(scene, camera)) : renderer.render(scene, camera));
   }
 
   function applyShadowSize() {
