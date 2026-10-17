@@ -41,6 +41,7 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stubStarHermit, launchToken } from './starhermit-e2e.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SHOT = (stage, vp) => `/tmp/serpent-quest-e2e-${stage}-${vp}.png`;
@@ -547,6 +548,82 @@ async function runGraphicsPass(browser, name, ctxOpts) {
   ok(`[${name}] graphics pass: no console errors or warnings`);
 }
 
+
+// ---------------------------------------------------------------------------
+// Language + report pass (signed in through a stubbed StarHermit API):
+// Automatic follows the account's preferred language (fr-CA); choosing Italian
+// in Settings mid-round (opened from the pause card) re-renders the settings,
+// HUD and pause card in place and saves ui.language; Report a problem posts to
+// /reports. All through real clicks/taps; any console error or warning fails.
+// ---------------------------------------------------------------------------
+
+async function runLanguagePass(browser, name, ctxOpts, touch) {
+  const errors = [];
+  const context = await browser.newContext(ctxOpts);
+  const page = await context.newPage();
+  page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+  page.on('console', (m) => {
+    if ((m.type() !== 'error' && m.type() !== 'warning') || browserNoise.test(m.text())) return;
+    errors.push(`console ${m.type()}: ${m.text()}`);
+  });
+  const press = (loc) => (touch ? loc.tap() : loc.click());
+  try {
+    const calls = await stubStarHermit(page, { preferredLanguage: 'fr-CA' });
+    await page.goto('about:blank');
+    await page.goto(`${BASE}/index.html#game_token=${launchToken()}`, { waitUntil: 'load' });
+    await page.waitForSelector('#screen-title.active', { timeout: 15000 });
+    await page.waitForFunction(() => document.documentElement.lang === 'fr-CA', null, { timeout: 10000 });
+    if ((await page.textContent('#screen-title .subtitle')).trim() !== 'Dirigez. Grandissez. Déjouez le jardin.') throw new Error('title not in French');
+    // Into a round, frozen with the pause button during the countdown.
+    await press(page.locator('#screen-title .menu-stack .btn.primary'));
+    await page.waitForSelector('#screen-setup.active');
+    await press(page.locator('#screen-setup [data-autofocus="1"]'));
+    await page.waitForFunction(() => window.__sq?.session?.phase === 'countdown', null, { timeout: 10000 });
+    await press(page.locator('.tray-btn[data-i18n-aria="Pause"]'));
+    await page.waitForSelector('#pause-overlay.active');
+    await press(page.locator('#pause-overlay .btn').nth(2)); // Settings
+    await page.waitForSelector('#screen-settings.active #gfx-card');
+    const choice = page.locator('#gfx-card [data-game-language="choice"]');
+    await choice.scrollIntoViewIfNeeded();
+    const auto = ((await choice.locator('option').first().textContent()) || '').trim();
+    if (auto !== 'Automatique — Français (Canada)') throw new Error(`Automatic label not resolved: ${auto}`);
+    await choice.selectOption('it-IT');
+    await page.waitForFunction(() => document.documentElement.lang === 'it-IT');
+    await page.waitForFunction(() => /Salvato/.test(document.querySelector('[data-game-language="status"]').textContent));
+    if (calls.settings['ui.language']?.choice !== 'it-IT') throw new Error('ui.language not saved: ' + JSON.stringify(calls.settings));
+    if ((await page.textContent('#screen-settings h1')).trim() !== 'Impostazioni') throw new Error('settings title not re-rendered');
+    if ((await page.textContent('#gfx-title')).trim() !== 'Grafica') throw new Error('graphics card not re-rendered');
+    if (!/Bacche mangiate/.test(await page.textContent('#hud-objective'))) throw new Error('HUD not re-rendered');
+    if ((await page.textContent('#pause-overlay h2')).trim() !== 'In pausa') throw new Error('pause card not re-rendered');
+    if ((await page.getAttribute('.tray-btn[data-dir="up"]', 'aria-label')) !== 'Vai su') throw new Error('tray aria-labels not re-rendered');
+    // Report a problem (signed in only).
+    const title = page.locator('[data-game-report="title"]');
+    await title.scrollIntoViewIfNeeded();
+    await title.fill('Test report');
+    await press(page.locator('[data-game-report="send"]'));
+    await page.waitForFunction(() => /Grazie/.test(document.querySelector('[data-game-report="status"]').textContent));
+    if (!calls.reports?.[0] || calls.reports[0].kind !== 'bug') throw new Error('report not posted');
+    const vw = page.viewportSize().width;
+    for (const sel of ['[data-game-language="choice"]', '[data-game-report="send"]', '#gfx-card']) {
+      const b = await page.locator(sel).first().boundingBox();
+      if (!b || b.x < 0 || b.x + b.width > vw + 1) throw new Error(`${sel} cut off horizontally`);
+    }
+    await page.screenshot({ path: SHOT('language', name) });
+    await choice.selectOption('auto');
+    await page.waitForFunction(() => document.documentElement.lang === 'fr-CA');
+    // Back to the paused round: the pause card follows the language; the round is untouched.
+    await press(page.locator('#screen-settings .btn-row .btn.ghost'));
+    await page.waitForFunction(() => !document.querySelector('#screens .screen.active'));
+    if ((await page.textContent('#pause-overlay h2')).trim() !== 'En pause') throw new Error('pause card not in French');
+    if (await page.evaluate(() => window.__sq.session.state.status) !== 'active') throw new Error('round did not survive the language change');
+    await page.unroute(/\/api\/v1\//);
+  } finally {
+    await context.close();
+  }
+  if (errors.length) throw new Error(`${name} language pass had console output:\n  ${errors.join('\n  ')}`);
+  ok(`[${name}] language — Automatic → fr-CA, Italian mid-round re-renders settings/HUD/pause, ui.language saved, report posted`);
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -563,6 +640,8 @@ try {
     { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true }, { full: false });
   await runGraphicsPass(browser, 'desktop', { viewport: { width: 1280, height: 800 } });
   await runGraphicsPass(browser, 'mobile', { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  await runLanguagePass(browser, 'desktop', { viewport: { width: 1280, height: 800 } }, false);
+  await runLanguagePass(browser, 'mobile', { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true }, true);
   console.log('\nE2E PASS — serpent-quest, desktop + mobile, no page errors');
 } catch (e) {
   failures++;

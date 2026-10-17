@@ -20,16 +20,24 @@ const timers = { setTimeout: (fn, ms) => (ms > 5000 ? 0 : setTimeout(fn, ms)), c
 let net, local;
 function stubNet() {
   const calls = [];
-  const store = { save: null, patches: [], controls: [] };
+  const store = { save: null, etag: null, version: 0, patches: [], controls: [] };
   const fetch = async (url, init = {}) => {
     const method = init.method || 'GET';
     calls.push({ method, url, auth: init.headers && init.headers.Authorization });
     const json = (code, body) => new Response(JSON.stringify(body), { status: code, headers: { 'Content-Type': 'application/json' } });
     const g = '/api/v1/games/serpent-quest';
     if (url === '/api/v1/users/u-1234567890/profile') return json(200, { nickname: 'Sly Sam' });
+    if (url === '/api/v1/me/cloud-saves/game%3Aserpent-quest/info') return json(200, store.save ? { exists: true, etag: store.etag } : { exists: false });
     if (url === '/api/v1/me/cloud-saves/game%3Aserpent-quest') {
       if (method === 'GET') return store.save ? new Response(store.save, { status: 200 }) : json(404, {});
-      if (method === 'PUT') { store.save = Buffer.from(JSON.parse(init.body).dataBase64, 'base64'); return json(200, {}); }
+      if (method === 'PUT') {
+        // Conditional writes (SDK ETag): a write based on an older version loses with 412.
+        const h = init.headers || {};
+        if ((h['If-Match'] && h['If-Match'] !== store.etag) || (h['If-None-Match'] === '*' && store.save)) return json(412, { etag: store.etag });
+        store.save = Buffer.from(JSON.parse(init.body).dataBase64, 'base64');
+        store.etag = `"v${++store.version}"`;
+        return json(200, { etag: store.etag });
+      }
     }
     if (url === `${g}/settings`) {
       if (method === 'GET') return json(200, { settings: { music: 0.2, bindings: { up: ['KeyI'] } } });
@@ -102,7 +110,8 @@ test('hosted: token, nickname, cloud save, settings KV, bindings, board', async 
 });
 
 test('standalone on the platform host: no network; sign-in offered', async () => {
-  launch('', 'serpent-quest.starhermit.com');
+  // Sign-in is offered only on a game's UUID host (<uuid>.starhermit.com).
+  launch('', '0b9d6f2e-3c4a-4e5b-9a7c-1d2e3f405162.starhermit.com');
   const p = createPlatform();
   assert.equal(p.hosted, false);
   assert.equal(p.canSignIn(), true);
@@ -130,4 +139,32 @@ test('standalone on localhost: no own-server calls; local clock', async () => {
   await sleep(50);
   assert.deepEqual(net.calls, []);
   assert.deepEqual(local, []);
+});
+
+test('save conflict: a write that loses to another device reloads the slot for the merge', async () => {
+  launch(`#game_token=${TOKEN}`, 'localhost');
+  const p = createPlatform();
+  assert.equal(await p.cloudSync.load(), null);
+  p.cloudSync.schedule({ version: 1, progression: { masteryPoints: 1 } });
+  await p.cloudSync.flush();
+  // Another device (its own SDK instance on the same account) saves in between.
+  const loc2 = { hash: `#game_token=${TOKEN}`, pathname: '/', search: '', hostname: 'localhost', href: `https://localhost/#game_token=${TOKEN}`, origin: 'https://localhost' };
+  const other = SDK.create({ window: { location: loc2, history: { state: null, replaceState() {} } }, fetch: net.fetch, ...timers });
+  other.init();
+  await other.loadJSON();
+  other.saveJSON({ version: 1, progression: { masteryPoints: 9 } }, 0);
+  await other.flushSave(true);
+  const seen = [];
+  p.cloudSync.onConflict((remote) => {
+    seen.push(remote);
+    p.cloudSync.schedule({ version: 1, progression: { masteryPoints: 9, merged: true } });
+    p.cloudSync.flush();
+  });
+  p.cloudSync.schedule({ version: 1, progression: { masteryPoints: 2 } });
+  await p.cloudSync.flush();
+  for (let i = 0; i < 50 && !seen.length; i++) await sleep(5);
+  await sleep(30);
+  assert.deepEqual(seen, [{ version: 1, progression: { masteryPoints: 9 } }]);
+  assert.deepEqual(await other.loadJSON(), { version: 1, progression: { masteryPoints: 9, merged: true } });
+  assert.equal(p.cloudSync.status, 'synced');
 });

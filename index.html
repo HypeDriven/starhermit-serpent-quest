@@ -14,6 +14,7 @@
 <script src="ui-scale.js"></script>
 <script src="browser-guard.js"></script>
 <script src="starhermit-sdk.js"></script>
+<script src="sh-language.js"></script>
 </head>
 <body>
   <div id="app">
@@ -31,35 +32,33 @@
     <div id="compat" hidden role="alert">
       <div class="loading-card">
         <h1>Serpent Quest</h1>
-        <p>This garden needs WebGL to grow, and your browser could not provide it.
-        Your profile and progress are safe on this device. Try a current version of
-        Chrome, Edge, Firefox, or Safari.</p>
+        <p data-i18n="This garden needs WebGL to grow, and your browser could not provide it. Your profile and progress are safe on this device. Try a current version of Chrome, Edge, Firefox, or Safari.">This garden needs WebGL to grow, and your browser could not provide it. Your profile and progress are safe on this device. Try a current version of Chrome, Edge, Firefox, or Safari.</p>
       </div>
     </div>
 
     <!-- Top safe-area status bar -->
     <header id="topbar" hidden>
-      <button id="chip-profile" class="chip" type="button" aria-label="Profile">
+      <button id="chip-profile" class="chip" type="button" aria-label="Profile" data-i18n-aria="Profile">
         <span id="chip-avatar" aria-hidden="true"></span><span id="chip-name">Guest</span>
       </button>
       <div id="topbar-center">
         <button id="chip-daily" class="chip" type="button"></button>
       </div>
       <div class="topbar-actions">
-        <button id="btn-help-top" class="icon-btn" type="button" aria-label="Help">?</button>
-        <button id="btn-settings-top" class="icon-btn" type="button" aria-label="Settings">⚙</button>
+        <button id="btn-help-top" class="icon-btn" type="button" aria-label="Help" data-i18n-aria="Help">?</button>
+        <button id="btn-settings-top" class="icon-btn" type="button" aria-label="Settings" data-i18n-aria="Settings">⚙</button>
       </div>
     </header>
 
     <!-- Main stage: rails + playfield -->
     <main id="stage" hidden>
-      <aside id="rail-left" aria-label="Objective and progression"></aside>
+      <aside id="rail-left" aria-label="Objective and progression" data-i18n-aria="Objective and progression"></aside>
       <div id="canvas-wrap">
         <canvas id="game-canvas" aria-hidden="true"></canvas>
         <div id="hud" hidden>
           <div id="hud-top">
             <div id="hud-objective" role="status"></div>
-            <div id="hud-score" aria-label="Score"></div>
+            <div id="hud-score" aria-label="Score" data-i18n-aria="Score"></div>
           </div>
           <div id="countdown" hidden aria-hidden="true"></div>
           <div id="toast" role="status" aria-live="polite" hidden></div>
@@ -70,14 +69,14 @@
           <div class="tray-cluster" id="tray-right"></div>
         </div>
       </div>
-      <aside id="rail-right" aria-label="Status and score"></aside>
+      <aside id="rail-right" aria-label="Status and score" data-i18n-aria="Status and score"></aside>
     </main>
 
     <!-- Screen overlays (semantic HTML over the canvas) -->
     <div id="screens"></div>
 
     <!-- Accessible board mirror: concise navigable model of the 3D scene -->
-    <section id="board-mirror" class="visually-hidden" aria-label="Board state description" tabindex="-1"></section>
+    <section id="board-mirror" class="visually-hidden" aria-label="Board state description" data-i18n-aria="Board state description" tabindex="-1"></section>
 
     <!-- Live regions -->
     <div id="live-polite" class="visually-hidden" role="status" aria-live="polite"></div>

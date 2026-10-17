@@ -148,9 +148,11 @@ p, li, td { max-width: 70ch; }
 #toast.warn { border-color: var(--danger); color: #ffd9d2; }
 #toast.floating { position: fixed; z-index: 50; bottom: calc(1.2rem + var(--sab)); pointer-events: none; }
 #caption {
-  position: absolute; left: 50%; bottom: calc(0.6rem + var(--sab)); transform: translateX(-50%);
+  /* above the thumb-zone tray (never over the D-pad or action buttons), below the toast */
+  position: absolute; left: 50%; bottom: calc(22% + var(--sab)); transform: translateX(-50%);
   background: #000c; border-radius: 8px; padding: 0.25rem 0.7rem;
-  font-size: 0.8rem; color: var(--ink-dim);
+  font-size: 0.8rem; color: var(--ink-dim); pointer-events: none; text-align: center;
+  max-width: min(calc(80vw / var(--ui-scale, 1)), 46ch);
 }
 
 /* --- Action tray (thumb zone) --- */

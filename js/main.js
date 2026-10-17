@@ -14,7 +14,7 @@ import {
   loadSettings, saveSettings, loadProfile, saveProfile,
   loadProgression, saveProgression, loadBoards, saveBoards,
   saveSnapshot, loadSnapshot, clearSnapshot, compareResults,
-  mergeProgression,
+  mergeProgression, mergeBoards,
 } from './storage.js';
 import { GameSession, BUILD_VERSION } from './session.js';
 import { createRenderer } from './render.js';
@@ -23,37 +23,48 @@ import { createAudio } from './audio.js';
 import { createUI } from './ui.js';
 import { createPlatform } from './platform.js';
 import { shText } from './sh-strings.js';
+import { T, N, pname, getLang, onLanguage, initLanguage } from './i18n.js';
 
 // ---------------------------------------------------------------------------
 // Static declarations
 // ---------------------------------------------------------------------------
 
 const ACHIEVEMENTS = [
-  { key: 'first-clear', name: 'First Bloom', desc: 'Complete your first journey stage.' },
-  { key: 'mechanic-mastery', name: 'Garden Scholar', desc: 'Complete every lesson in Learn mode.' },
-  { key: 'daily-streak-3', name: 'Three Sunrises', desc: 'Play the daily challenge three days in a row.' },
-  { key: 'grand-milestone', name: 'Crucible Clearer', desc: 'Clear journey stage 30, Mastery: Crucible.' },
-  { key: 'seasoned-gardener', name: 'Seasoned Gardener', desc: 'Finish 50 rounds of Serpent Quest.' },
+  { key: 'first-clear', name: N('First Bloom'), desc: N('Complete your first journey stage.') },
+  { key: 'mechanic-mastery', name: N('Garden Scholar'), desc: N('Complete every lesson in Learn mode.') },
+  { key: 'daily-streak-3', name: N('Three Sunrises'), desc: N('Play the daily challenge three days in a row.') },
+  { key: 'grand-milestone', name: N('Crucible Clearer'), desc: N('Clear journey stage 30, Mastery: Crucible.') },
+  { key: 'seasoned-gardener', name: N('Seasoned Gardener'), desc: N('Finish 50 rounds of Serpent Quest.') },
 ];
 
 const COSMETICS = [
-  { id: 'trail-leaf', name: 'Leaf Scales', cost: 0, tint: null },
-  { id: 'trail-petal', name: 'Petal Scales', cost: 30, tint: 0xd96a9a },
-  { id: 'trail-spark', name: 'Sunspark Scales', cost: 60, tint: 0xd9a83c },
-  { id: 'trail-frost', name: 'Frost Scales', cost: 100, tint: 0x5a9ad9 },
+  { id: 'trail-leaf', name: N('Leaf Scales'), cost: 0, tint: null },
+  { id: 'trail-petal', name: N('Petal Scales'), cost: 30, tint: 0xd96a9a },
+  { id: 'trail-spark', name: N('Sunspark Scales'), cost: 60, tint: 0xd9a83c },
+  { id: 'trail-frost', name: N('Frost Scales'), cost: 100, tint: 0x5a9ad9 },
 ];
 
+// English source strings; translated with T() where they are shown.
 const REASON_TEXT = {
-  'crashed-wall': 'The hedge wall wins this round.',
-  'crashed-self': 'Tangled in your own coils.',
-  'crashed-obstacle': 'A rock ended that path.',
-  'eaten-by-rival': 'A hunter caught your serpent.',
-  'moves-exhausted': 'Out of moves.',
-  'time-up': 'Time ran out.',
-  abandoned: 'Round left unfinished.',
+  'crashed-wall': N('The hedge wall wins this round.'),
+  'crashed-self': N('Tangled in your own coils.'),
+  'crashed-obstacle': N('A rock ended that path.'),
+  'eaten-by-rival': N('A hunter caught your serpent.'),
+  'moves-exhausted': N('Out of moves.'),
+  'time-up': N('Time ran out.'),
+  abandoned: N('Round left unfinished.'),
 };
 
-const MODE_LABELS = { learn: 'Lesson', journey: 'Journey', daily: 'Daily', practice: 'Practice', challenge: 'Challenge', chase: 'Score chase', replay: 'Replay' };
+const MODE_LABELS = { learn: N('Lesson'), journey: N('Journey'), daily: N('Daily'), practice: N('Practice'), challenge: N('Challenge'), chase: N('Score chase'), replay: N('Replay') };
+const modeLabel = (mode) => (MODE_LABELS[mode] ? T(MODE_LABELS[mode]) : '');
+const DIR_NAMES = { up: N('up'), down: N('down'), left: N('left'), right: N('right') };
+// Journey stages that introduce a concept (stage.teaches → shown in the setup subtitle).
+const TEACHES = {
+  steer: N('steering'), length: N('growing long'), hunt: N('hunting prey'), threat: N('hunters'),
+  golden: N('golden berries'), speed: N('speed'), endure: N('endurance'),
+};
+/** A setup/flow title or subtitle: a string or a thunk re-read on a language change. */
+const txt = (v) => (typeof v === 'function' ? v() : v || '');
 
 // ---------------------------------------------------------------------------
 // Application state
@@ -85,8 +96,11 @@ let setupState = null;       // options chosen on the setup screen
 // ---------------------------------------------------------------------------
 
 async function boot() {
+  // Game language first (sh-language.js: Language setting → account → browser) so boot text is localized.
+  initLanguage();
+  onLanguage(refreshLanguage);
   ui = createUI({ onAction });
-  ui.setLoading(20, 'Checking the soil…');
+  ui.setLoading(20, T('Checking the soil…'));
 
   // Honor the OS reduced-motion preference on first run (before any stored choice).
   try {
@@ -100,7 +114,7 @@ async function boot() {
     return;
   }
 
-  ui.setLoading(40, 'Planting the garden…');
+  ui.setLoading(40, T('Planting the garden…'));
   const canvas = document.getElementById('game-canvas');
   renderer = createRenderer({
     canvas,
@@ -108,12 +122,12 @@ async function boot() {
     onSteer: (dir) => steer(dir),
     onCellPicked: () => {},
     onContextLost: () => {
-      ui.toast('Graphics context lost — restoring…', 'warn');
-      ui.announce('Graphics interrupted. Restoring the garden.', true);
+      ui.toast(T('Graphics context lost — restoring…'), 'warn');
+      ui.announce(T('Graphics interrupted. Restoring the garden.'), true);
     },
     onContextRestored: () => {
       if (session) renderer.syncSnapshot(session.getSnapshot(), 1);
-      ui.toast('Garden restored.');
+      ui.toast(T('Garden restored.'));
     },
   });
   ui.setGraphicsInfo(() => renderer.graphicsInfo());
@@ -121,13 +135,13 @@ async function boot() {
   applyGraphics();
   audio = createAudio({ getSettings: () => settings });
 
-  ui.setLoading(70, 'Opening the gates…');
+  ui.setLoading(70, T('Opening the gates…'));
   ui.wireStatic(settings);
   wireGlobalInput();
   window.addEventListener('pagehide', () => platform.cloudSync.flush());
   initHostedState();
 
-  ui.setLoading(90, 'Almost there…');
+  ui.setLoading(90, T('Almost there…'));
   await nextFrame();
   startAttract();
   ui.showChrome(true);
@@ -150,8 +164,10 @@ function nextFrame() { return new Promise((r) => requestAnimationFrame(() => req
 // Hosted state: cloud save mirror + account display name
 // ---------------------------------------------------------------------------
 
-// Remote-preferred load: the platform slot wins on conflict; localStorage
-// remains the offline cache either way.
+// Boot load merges the platform slot with this device's progress and boards
+// (mergeProgression / mergeBoards: nothing is dropped); localStorage remains
+// the offline cache. A write that loses to another device (SDK 'saveconflict')
+// reloads, merges the same way and saves again.
 async function initHostedState() {
   platform.onAuth((signedIn) => {
     if (!signedIn) ui.toast(shText('signedOut'));
@@ -172,23 +188,19 @@ async function initHostedState() {
   platform.cloudSync.onStatus(() => {
     if (ui.activeScreen === 'profile') showProfile();
   });
+  platform.cloudSync.onConflict((remote) => {
+    adoptRemote(remote);
+    syncCloudSave();
+    if (ui.activeScreen === 'title') goTitle();
+  });
+  let differs = true;
   try {
     const remote = await platform.cloudSync.load();
-    if (remote && (remote.progression || remote.boards)) {
-      if (remote.progression) {
-        const m = mergeProgression(progression, remote.progression);
-        progression = m.conflict ? remote.progression : m.merged;
-      }
-      if (remote.boards && typeof remote.boards === 'object') {
-        boards = { daily: {}, chase: [], challenges: {}, ...remote.boards };
-      }
-      saveProgression(progression);
-      saveBoards(boards);
-    }
+    differs = adoptRemote(remote);
   } catch { /* local cache stays authoritative */ }
   cloudReady = true;
-  // A save made while loading was held: push the state as it stands after adoption.
-  if (cloudSaveHeld) { cloudSaveHeld = false; syncCloudSave(); }
+  // Push when the merge holds progress the cloud lacks, or a save was held meanwhile.
+  if (cloudSaveHeld || differs) { cloudSaveHeld = false; syncCloudSave(); }
   // Nickname from the account profile (never /me, never usernames); rendered
   // in the topbar, title, and boards via profile.displayName.
   platform.fetchProfileName().then((name) => {
@@ -199,6 +211,20 @@ async function initHostedState() {
     ui.updateTopbar(topbarVM());
     if (ui.activeScreen === 'title') goTitle();
   }).catch(() => {});
+}
+
+/** Merge a cloud document into local progression + boards; true when the result differs from it. */
+function adoptRemote(remote) {
+  if (!remote || !(remote.progression || remote.boards)) return true;
+  const p = mergeProgression(progression, remote.progression);
+  const b = mergeBoards(boards, remote.boards);
+  const differs = JSON.stringify(p) !== JSON.stringify(remote.progression || null)
+    || JSON.stringify(b) !== JSON.stringify(remote.boards || null);
+  progression = p;
+  boards = b;
+  saveProgression(progression);
+  saveBoards(boards);
+  return differs;
 }
 
 // Cloud mirror of the local save doc: debounced by the adapter, flushed on
@@ -216,13 +242,13 @@ function syncCloudSave() {
 
 function syncStatusText() {
   const labels = {
-    idle: 'Cloud save: ready',
-    saving: 'Cloud save: saving…',
-    synced: 'Cloud save: synced',
-    error: 'Cloud save: offline — will retry',
-    offline: 'Cloud save: offline',
+    idle: N('Cloud save: ready'),
+    saving: N('Cloud save: saving…'),
+    synced: N('Cloud save: synced'),
+    error: N('Cloud save: offline — will retry'),
+    offline: N('Cloud save: offline'),
   };
-  return labels[platform.cloudSync.status] || '';
+  return labels[platform.cloudSync.status] ? T(labels[platform.cloudSync.status]) : '';
 }
 
 // ---------------------------------------------------------------------------
@@ -267,7 +293,7 @@ function goTitle() {
     autofocus: '1',
     dailyLabel: dailyLabel(),
     snapshot: snap ? { label: snapshotLabel(snap) } : null,
-    progressText: `Journey: ${cleared} / ${JOURNEY_STAGES.length} stages cleared · Mastery ${progression.masteryPoints} · ${profile.displayName}`,
+    progressText: T('Journey: {cleared} / {total} stages cleared · Mastery {mastery} · {name}', { cleared, total: JOURNEY_STAGES.length, mastery: progression.masteryPoints, name: pname(profile.displayName) }),
     signedIn: platform.hosted,
     canSignIn: platform.canSignIn(),
   });
@@ -288,15 +314,15 @@ function goBack() {
 
 function showNavScreen(name) {
   switch (name) {
-    case 'modes': ui.showScreen('modes', { title: 'Modes' }); break;
+    case 'modes': ui.showScreen('modes', { title: T('Modes') }); break;
     case 'journey': showJourney(); break;
     case 'learn': showLearn(); break;
     case 'challenges': showChallenges(); break;
     case 'boards': showBoards(); break;
     case 'progression': showProgression(); break;
     case 'profile': showProfile(); break;
-    case 'help': ui.showScreen('help', { title: 'Help', bindings: settings.bindings }); break;
-    case 'settings': ui.showScreen('settings', { title: 'Settings', settings }); break;
+    case 'help': ui.showScreen('help', { title: T('Help'), bindings: settings.bindings }); break;
+    case 'settings': ui.showScreen('settings', { title: T('Settings'), settings }); break;
     case 'setup': if (setupState) showSetup(setupState.flow); break;
     default: goTitle();
   }
@@ -305,36 +331,36 @@ function showNavScreen(name) {
 function showJourney() {
   const clearedCount = Object.values(progression.stages).filter((s) => s.won).length;
   ui.showScreen('journey', {
-    title: 'Journey',
-    summary: `${clearedCount} of ${JOURNEY_STAGES.length} cleared. Mastery stages award extra points.`,
+    title: T('Journey'),
+    summary: T('{cleared} of {total} cleared. Mastery stages award extra points.', { cleared: clearedCount, total: JOURNEY_STAGES.length }),
     stages: JOURNEY_STAGES.map((st, i) => {
       const rec = progression.stages[st.id];
       const locked = i > 0 && !progression.stages[JOURNEY_STAGES[i - 1].id]?.won;
-      return { id: st.id, index: st.index, name: st.name, mastery: st.kind === 'mastery', locked, won: !!rec?.won, bestScore: rec?.bestScore || 0 };
+      return { id: st.id, index: st.index, name: T(st.name), mastery: st.kind === 'mastery', locked, won: !!rec?.won, bestScore: rec?.bestScore || 0 };
     }),
   });
 }
 
 function showLearn() {
   ui.showScreen('learn', {
-    title: 'Learn',
-    tutorials: TUTORIALS.map((t) => ({ id: t.id, name: t.name, done: !!progression.tutorials[t.id]?.done })),
+    title: T('Learn'),
+    tutorials: TUTORIALS.map((t) => ({ id: t.id, name: T(t.name), done: !!progression.tutorials[t.id]?.done })),
   });
 }
 
 function showChallenges() {
   ui.showScreen('challenges', {
-    title: 'Challenges',
-    challenges: CHALLENGES.map((c) => ({ id: c.id, name: c.name, desc: c.desc, best: boards.challenges[c.id]?.score || 0 })),
+    title: T('Challenges'),
+    challenges: CHALLENGES.map((c) => ({ id: c.id, name: T(c.name), desc: T(c.desc), best: boards.challenges[c.id]?.score || 0 })),
   });
 }
 
 function showProgression() {
   const cleared = Object.values(progression.stages).filter((s) => s.won).length;
   ui.showScreen('progression', {
-    title: 'Progression',
-    journeyText: `${cleared} / ${JOURNEY_STAGES.length} journey stages cleared.`,
-    masteryText: `${progression.masteryPoints} mastery points · ${progression.totalRounds} rounds played · daily streak ${progression.currentStreakDays}`,
+    title: T('Progression'),
+    journeyText: T('{cleared} / {total} journey stages cleared.', { cleared, total: JOURNEY_STAGES.length }),
+    masteryText: T('{mastery} mastery points · {rounds} rounds played · daily streak {streak}', { mastery: progression.masteryPoints, rounds: progression.totalRounds, streak: progression.currentStreakDays }),
     achievements: ACHIEVEMENTS.map((a) => ({ ...a, unlocked: !!progression.achievements[a.key] })),
     cosmetics: COSMETICS.map((c) => ({
       ...c,
@@ -346,13 +372,13 @@ function showProgression() {
 
 function showProfile() {
   ui.showScreen('profile', {
-    title: 'Profile',
+    title: T('Profile'),
     profile,
     readOnly: platform.hosted,
     syncText: platform.hosted ? syncStatusText() : '',
     accountText: platform.hosted
-      ? 'Signed in through the host. Your garden name comes from your account profile.'
-      : 'Playing as a local guest. Progress is stored on this device; sign in through the host for durable cloud progress.',
+      ? T('Signed in through the host. Your garden name comes from your account profile.')
+      : T('Playing as a local guest. Progress is stored on this device; sign in through the host for durable cloud progress.'),
   });
 }
 
@@ -449,8 +475,8 @@ async function showBoards() {
   };
 
   const boardsVM = [
-    mkBoard('Weekly chase', chaseLocal, chaseCfg, chaseDesc.rulesetId),
-    mkBoard('Daily', dailyLocal, dailyCfg, dailyDesc.rulesetId),
+    mkBoard(T('Weekly chase'), chaseLocal, chaseCfg, chaseDesc.rulesetId),
+    mkBoard(T('Daily'), dailyLocal, dailyCfg, dailyDesc.rulesetId),
   ];
 
   if (platform.hosted) {
@@ -460,13 +486,13 @@ async function showBoards() {
       platform.fetchLeaderboard(false),
       platform.fetchLeaderboard(true),
     ]);
-    if (global) boardsVM.push({ name: 'Global', entries: global.slice(0, 10), casual: false });
-    if (friends) boardsVM.push({ name: 'Friends', entries: friends.slice(0, 10), casual: false });
-    if (!global && !friends) boardsVM.push({ name: 'Friends', entries: [], casual: true });
+    if (global) boardsVM.push({ name: T('Global'), entries: global.slice(0, 10), casual: false });
+    if (friends) boardsVM.push({ name: T('Friends'), entries: friends.slice(0, 10), casual: false });
+    if (!global && !friends) boardsVM.push({ name: T('Friends'), entries: [], casual: true });
   } else {
-    boardsVM.push({ name: 'Friends', entries: [], casual: true });
+    boardsVM.push({ name: T('Friends'), entries: [], casual: true });
   }
-  ui.showScreen('boards', { title: 'Leaderboards', boards: boardsVM });
+  ui.showScreen('boards', { title: T('Leaderboards'), boards: boardsVM });
 }
 
 // ---------------------------------------------------------------------------
@@ -475,26 +501,32 @@ async function showBoards() {
 
 function describeFacts(desc, config) {
   const facts = [];
-  const goalText = { food: 'eat berries', length: 'grow long', rivals: 'defeat small rivals', survive: 'survive', score: 'score points' };
+  const goalText = { food: N('eat berries ({n})'), length: N('grow long ({n})'), rivals: N('defeat small rivals ({n})'), survive: N('survive ({n})'), score: N('score points ({n})') };
   if (desc.goals?.length) {
-    facts.push('Goals: ' + desc.goals.map((g) => `${goalText[g.kind] || g.kind} (${g.count})`).join(' + '));
+    facts.push(T('Goals: {list}', { list: desc.goals.map((g) => (goalText[g.kind] ? T(goalText[g.kind], { n: g.count }) : `${g.kind} (${g.count})`)).join(' + ') }));
   } else {
-    facts.push('No set goals — survive and score as much as you can.');
+    facts.push(T('No set goals — survive and score as much as you can.'));
   }
-  facts.push(`Arena ${config.grid.w}×${config.grid.h}${config.obstacles.length ? ' with obstacles' : ', open ground'}`);
+  facts.push(T(config.obstacles.length ? 'Arena {w}×{h} with obstacles' : 'Arena {w}×{h}, open ground', { w: config.grid.w, h: config.grid.h }));
   const small = (desc.rivals || []).filter((r) => r.tier === 'small').length;
   const big = (desc.rivals || []).filter((r) => r.tier === 'big').length;
-  if (small || big) facts.push(`Rivals: ${small ? small + ' prey' : ''}${small && big ? ', ' : ''}${big ? big + ' hunter' + (big > 1 ? 's' : '') : ''}`);
-  if (desc.moveLimit) facts.push(`Move limit: ${desc.moveLimit}`);
-  if (desc.maxTicks) facts.push(`Time cap: ${Math.round(desc.maxTicks * desc.tickMs / 1000)}s`);
-  facts.push(`Speed: ${desc.tickMs <= 100 ? 'very fast' : desc.tickMs <= 125 ? 'fast' : desc.tickMs <= 150 ? 'steady' : 'relaxed'}`);
+  if (small || big) {
+    const parts = [];
+    if (small) parts.push(T('{n} prey', { n: small }));
+    if (big) parts.push(T(big > 1 ? '{n} hunters' : '{n} hunter', { n: big }));
+    facts.push(T('Rivals: {list}', { list: parts.join(', ') }));
+  }
+  if (desc.moveLimit) facts.push(T('Move limit: {n}', { n: desc.moveLimit }));
+  if (desc.maxTicks) facts.push(T('Time cap: {n}s', { n: Math.round(desc.maxTicks * desc.tickMs / 1000) }));
+  const speed = desc.tickMs <= 100 ? N('very fast') : desc.tickMs <= 125 ? N('fast') : desc.tickMs <= 150 ? N('steady') : N('relaxed');
+  facts.push(T('Speed: {speed}', { speed: T(speed) }));
   return facts;
 }
 
 function durationText(desc) {
   const ticks = desc.parTicks || desc.maxTicks || 400;
   const secs = Math.round(ticks * desc.tickMs / 1000);
-  return '~' + Math.max(1, Math.round(secs / 60)) + ' min';
+  return T('~{n} min', { n: Math.max(1, Math.round(secs / 60)) });
 }
 
 function chaseDescriptor() {
@@ -505,7 +537,7 @@ function chaseDescriptor() {
   return {
     id: 'chase-' + weekKey,
     rulesetId: 'chase-weekly-v1',
-    name: 'Weekly Score Chase',
+    name: N('Weekly Score Chase'),
     seed: seedFromString('chase:' + weekKey),
     grid: { w: 20, h: 20 },
     food: { count: 4, goldenChance: 0.12 },
@@ -527,21 +559,21 @@ function showSetup(flow) {
   const options = [];
   if (flow.mode === 'practice') {
     options.push({
-      key: 'difficulty', label: 'Difficulty', value: setupState.options.difficulty || 'steady',
-      choices: PRACTICE_DIFFICULTIES.map((d) => [d.id, d.name]),
+      key: 'difficulty', label: T('Difficulty'), value: setupState.options.difficulty || 'steady',
+      choices: PRACTICE_DIFFICULTIES.map((d) => [d.id, T(d.name)]),
     });
     options.push({
-      key: 'theme', label: 'Garden theme', value: setupState.options.theme || 'meadow',
-      choices: THEMES.map((t) => [t.id, t.name]),
+      key: 'theme', label: T('Garden theme'), value: setupState.options.theme || 'meadow',
+      choices: THEMES.map((t) => [t.id, T(t.name)]),
     });
   }
   ui.showScreen('setup', {
-    title: flow.title || desc.name || 'Set up round',
-    subtitle: flow.subtitle || '',
+    title: txt(flow.title) || (desc.name ? T(desc.name) : T('Set up round')),
+    subtitle: txt(flow.subtitle),
     facts: describeFacts(desc, config),
     ranked,
     durationText: durationText(desc),
-    assistsText: settings.timingAssist ? 'Timing assist on' : (desc.mechanics?.allowUndo ? 'Undo allowed' : null),
+    assistsText: settings.timingAssist ? T('Timing assist on') : (desc.mechanics?.allowUndo ? T('Undo allowed') : null),
     options: options.length ? options : null,
     controls: flow.mode === 'learn' ? null : steeringHints(),
     suggestLearn: flow.mode !== 'learn' && !Object.values(progression.tutorials || {}).some((t) => t?.done)
@@ -556,10 +588,10 @@ function steeringHints() {
   const keys = (a) => (b[a] || []).map((k) => k.replace('Arrow', '')).join('/');
   return [
     coarse
-      ? 'Steer with the on-screen pad, a swipe, or by tapping a tile.'
-      : `Steer with ${keys('up') || 'W'} ${keys('left') || 'A'} ${keys('down') || 'S'} ${keys('right') || 'D'}, or click a tile.`,
-    'The serpent never stops — it keeps sliding forward until you turn it.',
-    'Hitting a hedge wall, your own tail or a rival ends the round.',
+      ? T('Steer with the on-screen pad, a swipe, or by tapping a tile.')
+      : T('Steer with {up} {left} {down} {right}, or click a tile.', { up: keys('up') || 'W', left: keys('left') || 'A', down: keys('down') || 'S', right: keys('right') || 'D' }),
+    T('The serpent never stops — it keeps sliding forward until you turn it.'),
+    T('Hitting a hedge wall, your own tail or a rival ends the round.'),
   ];
 }
 
@@ -597,8 +629,8 @@ function startRound(flow) {
   lastHudTick = -1;
 
   if (flow.tutorial) {
-    ui.toast(flow.tutorial.text);
-    ui.announce(flow.tutorial.text);
+    ui.toast(T(flow.tutorial.text));
+    ui.announce(T(flow.tutorial.text));
   }
   audio.unlock();
   audio.startAmbience(themeById(desc.themeId).ambience);
@@ -646,7 +678,7 @@ function onSessionEvent(e) {
     case 'input-ack': audio.play('turn'); renderer.playEvent({ type: 'turn' }); haptic(8); break;
     case 'turn': break;
     case 'invalid':
-      ui.toast(e.reason || 'That move is not legal.', 'warn');
+      ui.toast(T(e.reason || N('That move is not legal.')), 'warn');
       audio.play('invalid');
       renderer.playEvent({ type: 'invalid' });
       break;
@@ -669,13 +701,13 @@ function onSessionEvent(e) {
     case 'death':
       audio.play('death');
       renderer.playEvent(e);
-      ui.caption(audio.captionFor('death'));
+      ui.caption(T(audio.captionFor('death')));
       haptic([40, 60, 40]);
       break;
     case 'win':
       audio.play('win');
       renderer.playEvent(e);
-      ui.caption('Fanfare — objectives complete!');
+      ui.caption(T('Fanfare — objectives complete!'));
       haptic([20, 40, 20, 40, 60]);
       break;
     case 'resolved': onResolved(e.results); break;
@@ -716,7 +748,7 @@ function onPaused(reason) {
   if (reason === 'background') {
     pausedByBackground = true;
   } else {
-    ui.showPause(true, { summary: pauseSummary() });
+    ui.showPause(true, { summary: pauseSummary });
   }
   audio.play('pause');
 }
@@ -724,7 +756,7 @@ function onPaused(reason) {
 function pauseSummary() {
   if (!session) return '';
   const s = session.state;
-  return `Score ${s.score.total} · length ${s.snake.body.length} · tick ${s.tick}`;
+  return T('Score {score} · length {len} · tick {tick}', { score: s.score.total, len: s.snake.body.length, tick: s.tick });
 }
 
 function haptic(pattern) {
@@ -743,7 +775,7 @@ function onResolved(results) {
     return;
   }
   flow.lastResults = results;
-  flow.lbText = null;
+  flow.lb = null;
 
   progression.totalRounds += 1;
   const newlyUnlocked = [];
@@ -795,11 +827,11 @@ function onResolved(results) {
   if (flow.mode === 'chase' && flow.ranked) {
     // signed in: the run's total goes to the platform high-score board
     if (platform.hosted) {
-      flow.lbText = shText('lbPosting');
+      flow.lb = { state: 'posting' };
       platform.submitScore(results.score.total).then((r) => {
-        flow.lbText = !r.posted ? shText('lbNotPosted') : r.rank ? shText('lbRank', { rank: r.rank }) : shText('lbPosted');
+        flow.lb = !r.posted ? { state: 'failed' } : { state: 'posted', rank: r.rank || null };
         const line = document.getElementById('results-lb');
-        if (line && currentFlow === flow) line.textContent = flow.lbText;
+        if (line && currentFlow === flow) line.textContent = lbText(flow.lb);
       });
     }
     const entry = boardEntryFromResults(results, profile.displayName, true);
@@ -840,43 +872,56 @@ function unlockAchievement(key) {
   return true;
 }
 
-function showResults(results, extra = {}) {
+/** Leaderboard line state → text in the current language. */
+function lbText(lb) {
+  if (lb.state === 'posting') return shText('lbPosting');
+  if (lb.state === 'failed') return shText('lbNotPosted');
+  return lb.rank ? shText('lbRank', { rank: lb.rank }) : shText('lbPosted');
+}
+
+let lastResultsView = null; // [results, extra] of the results screen, re-rendered on a language change
+function showResults(results, extra = {}, refresh = false) {
+  lastResultsView = [results, extra];
   const flow = currentFlow || {};
   const won = results.won;
   const lessonPassed = flow.mode === 'learn' && !!results.lessonPassed;
   const displayWon = won || lessonPassed;
-  const headline = extra.isReplay ? 'Replay'
-    : lessonPassed ? 'Lesson complete!'
-    : (won ? 'Garden cleared!' : 'The garden wins');
+  const headline = extra.isReplay ? T('Replay')
+    : lessonPassed ? T('Lesson complete!')
+    : T(won ? 'Garden cleared!' : 'The garden wins');
   let nextAction = 'restart';
-  let nextLabel = 'Play again';
+  let nextLabel = T('Play again');
   if (flow.mode === 'journey' && won) {
     const idx = JOURNEY_STAGES.findIndex((s) => s.id === flow.descriptor.id);
-    if (idx >= 0 && idx + 1 < JOURNEY_STAGES.length) { nextAction = 'next-stage'; nextLabel = 'Next stage →'; }
+    if (idx >= 0 && idx + 1 < JOURNEY_STAGES.length) { nextAction = 'next-stage'; nextLabel = T('Next stage →'); }
   } else if (lessonPassed) {
     const idx = TUTORIALS.findIndex((t) => t.id === flow.tutorial.id);
-    if (idx >= 0 && idx + 1 < TUTORIALS.length) { nextAction = 'next-lesson'; nextLabel = 'Next lesson →'; }
+    if (idx >= 0 && idx + 1 < TUTORIALS.length) { nextAction = 'next-lesson'; nextLabel = T('Next lesson →'); }
   }
 
   const comparison = buildComparison(results, flow);
+  const invalid = results.invalidActions;
   ui.showScreen('results', {
-    title: 'Results',
+    title: T('Results'),
     autofocus: '1',
     won: displayWon,
     headline,
-    reasonText: extra.isReplay ? 'Watching the recorded round.'
-      : lessonPassed && results.reason === 'abandoned' ? 'Lesson target met — nicely done.'
-      : (REASON_TEXT[results.reason] || ''),
+    reasonText: extra.isReplay ? T('Watching the recorded round.')
+      : lessonPassed && results.reason === 'abandoned' ? T('Lesson target met — nicely done.')
+      : (REASON_TEXT[results.reason] ? T(REASON_TEXT[results.reason]) : ''),
     score: results.score,
-    metaText: `${results.ticks} ticks · ${(results.elapsedMs / 1000).toFixed(1)}s · ${results.invalidActions} invalid move${results.invalidActions === 1 ? '' : 's'} · seed 0x${results.seed.toString(16)} · build ${BUILD_VERSION}`,
-    achievements: (extra.newlyUnlocked || []).map((a) => `${a.name} — ${a.desc}`),
+    metaText: T(invalid === 1 ? '{ticks} ticks · {secs}s · {n} invalid move · seed {seed} · build {build}' : '{ticks} ticks · {secs}s · {n} invalid moves · seed {seed} · build {build}', {
+      ticks: results.ticks, secs: (results.elapsedMs / 1000).toFixed(1), n: invalid, seed: '0x' + results.seed.toString(16), build: BUILD_VERSION,
+    }),
+    achievements: (extra.newlyUnlocked || []).map((a) => `${T(a.name)} — ${T(a.desc)}`),
     comparison,
-    progressText: `Rounds played: ${progression.totalRounds} · Mastery ${progression.masteryPoints}`,
+    progressText: T('Rounds played: {rounds} · Mastery {mastery}', { rounds: progression.totalRounds, mastery: progression.masteryPoints }),
     nextAction, nextLabel,
     canReplay: !extra.isReplay && !!results.replay,
-    leaderboard: extra.isReplay ? null : flow.lbText || null,
+    leaderboard: extra.isReplay || !flow.lb ? null : lbText(flow.lb),
   });
-  ui.announce(`${headline}. Total score ${results.score.total}.`, true);
+  if (refresh) return;
+  ui.announce(T('{headline}. Total score {score}.', { headline, score: results.score.total }), true);
   if (extra.newlyUnlocked?.length) audio.play('achievement');
 }
 
@@ -887,11 +932,11 @@ function buildComparison(results, flow) {
     const me = boardEntryFromResults(results, profile.displayName, true);
     const all = [...ghosts, me].sort(compareResults);
     const rank = all.findIndex((e) => e.me) + 1;
-    return `You placed #${rank} of ${all.length} against the garden spirits${flow.ranked ? '' : ' (unranked round)'}.`;
+    return T(flow.ranked ? 'You placed #{rank} of {total} against the garden spirits.' : 'You placed #{rank} of {total} against the garden spirits (unranked round).', { rank, total: all.length });
   }
   if (flow.mode === 'journey') {
     const rec = progression.stages[flow.descriptor.id];
-    if (rec?.bestScore) return `Stage best: ${rec.bestScore}.`;
+    if (rec?.bestScore) return T('Stage best: {score}.', { score: rec.bestScore });
   }
   return null;
 }
@@ -969,7 +1014,7 @@ function updatePlayHud() {
     }];
   }
   const vm = {
-    modeLabel: (MODE_LABELS[currentFlow.mode] || '') + (currentFlow.ranked ? '' : ' · unranked') + (currentFlow.descriptor.name ? ' — ' + currentFlow.descriptor.name : ''),
+    modeLabel: modeLabel(currentFlow.mode) + (currentFlow.ranked ? '' : ' · ' + T('unranked')) + (currentFlow.descriptor.name ? ' — ' + T(currentFlow.descriptor.name) : ''),
     goals,
     score: s.score.total,
     movesLeft: s.config.moveLimit ? Math.max(0, s.config.moveLimit - s.stats.commands) : null,
@@ -979,12 +1024,12 @@ function updatePlayHud() {
   };
   ui.updateHUD(vm);
   ui.updateRails({
-    title: 'Objective',
+    title: T('Objective'),
     goals,
-    parText: s.config.parTicks ? `Par: ${s.config.parTicks} ticks` : null,
-    progressionText: `${Object.values(progression.stages).filter((x) => x.won).length}/${JOURNEY_STAGES.length} journey stages`,
-    scoreParts: { Food: s.score.food, Growth: s.score.growth, Rivals: s.score.rivals, Survival: s.score.survival, Objectives: s.score.objective },
-    statusText: `Length ${s.snake.body.length} · tick ${s.tick}` + (s.rivals.some((r) => r.alive && r.tier === 'big') ? ' · a hunter prowls!' : ''),
+    parText: s.config.parTicks ? T('Par: {n} ticks', { n: s.config.parTicks }) : null,
+    progressionText: T('{cleared}/{total} journey stages', { cleared: Object.values(progression.stages).filter((x) => x.won).length, total: JOURNEY_STAGES.length }),
+    scoreParts: { [T('Food')]: s.score.food, [T('Growth')]: s.score.growth, [T('Rivals')]: s.score.rivals, [T('Survival')]: s.score.survival, [T('Objectives')]: s.score.objective },
+    statusText: T('Length {len} · tick {tick}', { len: s.snake.body.length, tick: s.tick }) + (s.rivals.some((r) => r.alive && r.tier === 'big') ? ' · ' + T('a hunter prowls!') : ''),
   });
   ui.mirror(s);
 }
@@ -1033,9 +1078,9 @@ function wireGlobalInput() {
         pausedByBackground = false;
         const s = session.state;
         ui.showPause(true, {
-          summary: `While you were away the garden froze (solo rounds pause). Score ${s.score.total}, length ${s.snake.body.length}, tick ${s.tick} — nothing moved.`,
+          summary: () => T('While you were away the garden froze (solo rounds pause). Score {score}, length {len}, tick {tick} — nothing moved.', { score: s.score.total, len: s.snake.body.length, tick: s.tick }),
         });
-        ui.announce('Welcome back. The round was paused while you were away.', false);
+        ui.announce(T('Welcome back. The round was paused while you were away.'), false);
       }
     }
   });
@@ -1104,8 +1149,8 @@ function togglePause() {
 }
 
 function doUndo() {
-  if (session && session.undo()) ui.toast('Stepped back.');
-  else if (session && !session.state.config.mechanics.allowUndo) ui.toast('Undo is only available in Practice.', 'warn');
+  if (session && session.undo()) ui.toast(T('Stepped back.'));
+  else if (session && !session.state.config.mechanics.allowUndo) ui.toast(T('Undo is only available in Practice.'), 'warn');
 }
 
 function doHint() {
@@ -1113,7 +1158,7 @@ function doHint() {
   const safe = session.getSafeTurns().map((a) => a.dir);
   renderer.showHint(safe);
   setTimeout(() => renderer.clearHint(), 2500);
-  ui.announce(safe.length ? `Safe directions: ${safe.join(', ')}.` : 'No safe direction — brace yourself!');
+  ui.announce(safe.length ? T('Safe directions: {list}.', { list: safe.map((d) => T(DIR_NAMES[d] || d)).join(', ') }) : T('No safe direction — brace yourself!'));
 }
 
 function noteLessonAction() {
@@ -1147,8 +1192,8 @@ function onAction(name, payload = {}) {
     case 'quick-play': {
       const next = JOURNEY_STAGES.find((st, i) =>
         !progression.stages[st.id]?.won && (i === 0 || progression.stages[JOURNEY_STAGES[i - 1].id]?.won));
-      if (next) showSetup({ mode: 'journey', descriptor: next, title: `Stage ${next.index}: ${next.name}` });
-      else showSetup({ mode: 'practice', descriptor: (o) => practiceConfig(o.difficulty || 'steady', o.theme), title: 'Practice' });
+      if (next) showSetup({ mode: 'journey', descriptor: next, title: () => T('Stage {n}: {name}', { n: next.index, name: T(next.name) }) });
+      else showSetup({ mode: 'practice', descriptor: (o) => practiceConfig(o.difficulty || 'steady', o.theme), title: () => T('Practice') });
       break;
     }
     case 'nav-modes': navigate('modes'); showNavScreen('modes'); break;
@@ -1162,12 +1207,12 @@ function onAction(name, payload = {}) {
     case 'mode-journey': navigate('journey'); showJourney(); break;
     case 'mode-challenge': navigate('challenges'); showChallenges(); break;
     case 'mode-daily': dailyPlay(); break;
-    case 'mode-practice': showSetup({ mode: 'practice', descriptor: (o) => practiceConfig(o.difficulty || 'steady', o.theme || 'meadow'), title: 'Practice', subtitle: 'Undo available. Unranked — experiment freely.' }); break;
-    case 'mode-chase': showSetup({ mode: 'chase', descriptor: chaseDescriptor(), title: 'Weekly Score Chase', subtitle: 'Same garden all week for everyone. One long run.' }); break;
+    case 'mode-practice': showSetup({ mode: 'practice', descriptor: (o) => practiceConfig(o.difficulty || 'steady', o.theme || 'meadow'), title: () => T('Practice'), subtitle: () => T('Undo available. Unranked — experiment freely.') }); break;
+    case 'mode-chase': showSetup({ mode: 'chase', descriptor: chaseDescriptor(), title: () => T('Weekly Score Chase'), subtitle: () => T('Same garden all week for everyone. One long run.') }); break;
     case 'daily-play': dailyPlay(); break;
     case 'select-stage': {
       const st = stageById(payload.id);
-      if (st) showSetup({ mode: 'journey', descriptor: st, title: `Stage ${st.index}: ${st.name}`, subtitle: st.teaches ? `New concept: ${st.teaches}` : '' });
+      if (st) showSetup({ mode: 'journey', descriptor: st, title: () => T('Stage {n}: {name}', { n: st.index, name: T(st.name) }), subtitle: () => (st.teaches ? T('New concept: {concept}', { concept: T(TEACHES[st.teaches] || st.teaches) }) : '') });
       break;
     }
     case 'select-tutorial': {
@@ -1179,7 +1224,7 @@ function onAction(name, payload = {}) {
     }
     case 'select-challenge': {
       const c = CHALLENGES.find((x) => x.id === payload.id);
-      if (c) showSetup({ mode: 'challenge', descriptor: { ...c, rulesetId: 'challenge-v1' }, title: c.name, subtitle: c.desc });
+      if (c) showSetup({ mode: 'challenge', descriptor: { ...c, rulesetId: 'challenge-v1' }, title: () => T(c.name), subtitle: () => T(c.desc) });
       break;
     }
     case 'setup-option':
@@ -1205,7 +1250,7 @@ function onAction(name, payload = {}) {
     case 'next-stage': {
       const idx = JOURNEY_STAGES.findIndex((s) => s.id === currentFlow.descriptor.id);
       const next = JOURNEY_STAGES[idx + 1];
-      if (next) showSetup({ mode: 'journey', descriptor: next, title: `Stage ${next.index}: ${next.name}` });
+      if (next) showSetup({ mode: 'journey', descriptor: next, title: () => T('Stage {n}: {name}', { n: next.index, name: T(next.name) }) });
       break;
     }
     case 'next-lesson': {
@@ -1233,7 +1278,7 @@ function onAction(name, payload = {}) {
       saveSettings(settings);
       platform.saveBinding(payload.action, keys);
       showNavScreen('settings');
-      ui.toast(`Bound ${payload.action} to ${payload.key.replace('Arrow', '')}.`);
+      ui.toast(T('Bound {action} to {key}.', { action: payload.action, key: payload.key.replace('Arrow', '') }));
       break;
     }
     case 'profile-save':
@@ -1248,7 +1293,7 @@ function onAction(name, payload = {}) {
       const c = COSMETICS.find((x) => x.id === payload.id);
       if (!c) break;
       if (!progression.cosmetics.unlocked.includes(c.id)) {
-        if (progression.masteryPoints < c.cost) { ui.toast(`Needs ${c.cost} mastery points.`, 'warn'); break; }
+        if (progression.masteryPoints < c.cost) { ui.toast(T('Needs {n} mastery points.', { n: c.cost }), 'warn'); break; }
         progression.cosmetics.unlocked.push(c.id);
       }
       progression.cosmetics.equipped.trail = c.id;
@@ -1267,17 +1312,17 @@ function dailyPlay() {
   const desc = dailyConfig(platform.now());
   showSetup({
     mode: 'daily', descriptor: desc,
-    title: 'Daily Garden — ' + desc.day,
-    subtitle: platform.hosted
-      ? 'One shared seed for everyone today. Personal best syncs to your account.'
-      : 'One shared seed for everyone today. Ranked.',
+    title: () => T('Daily Garden — {day}', { day: desc.day }),
+    subtitle: () => (platform.hosted
+      ? T('One shared seed for everyone today. Personal best syncs to your account.')
+      : T('One shared seed for everyone today. Ranked.')),
   });
 }
 
 function dailyLabel() {
   const day = dailyConfig(platform.now()).day;
   const played = progression.dailiesPlayed[day];
-  return played ? `Daily ✓ (best ${played.score})` : 'Daily challenge';
+  return played ? T('Daily ✓ (best {score})', { score: played.score }) : T('Daily challenge');
 }
 
 function updateDailyChip() {
@@ -1293,7 +1338,7 @@ function topbarVM() {
   const played = progression.dailiesPlayed[day];
   return {
     profileName: profile.displayName,
-    dailyText: `${played ? '✓' : '◷'} Daily · next in ${Math.floor(mins / 60)}h${String(mins % 60).padStart(2, '0')}m${platform.hosted ? '' : ' (local time)'}`,
+    dailyText: `${played ? '✓' : '◷'} ` + T(platform.hosted ? 'Daily · next in {h}h{m}m' : 'Daily · next in {h}h{m}m (local time)', { h: Math.floor(mins / 60), m: String(mins % 60).padStart(2, '0') }),
   };
 }
 
@@ -1301,8 +1346,8 @@ function snapshotLabel(snap) {
   try {
     const data = JSON.parse(snap.state);
     const st = data.state;
-    return `${MODE_LABELS[data.mode] || 'Round'} · score ${st.score.total} · length ${st.snake.body.length} · saved ${new Date(snap.at).toLocaleTimeString()}`;
-  } catch { return 'A previous round can be resumed.'; }
+    return T('{mode} · score {score} · length {len} · saved {time}', { mode: modeLabel(data.mode) || T('Round'), score: st.score.total, len: st.snake.body.length, time: new Date(snap.at).toLocaleTimeString(getLang()) });
+  } catch { return T('A previous round can be resumed.'); }
 }
 
 function resumeSnapshot() {
@@ -1335,13 +1380,30 @@ function resumeSnapshot() {
     ui.setHudVisible(true);
     audio.unlock();
     session.start(1.5);
-    ui.toast('Round restored from your last safe snapshot.');
+    ui.toast(T('Round restored from your last safe snapshot.'));
   } catch (err) {
     console.warn('snapshot restore failed:', err);
     clearSnapshot();
-    ui.toast('That snapshot could not be restored.', 'warn');
+    ui.toast(T('That snapshot could not be restored.'), 'warn');
     goTitle();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Language change: re-render whatever is on screen in place (menus, setup,
+// results, HUD, rails, pause card, settings) without touching the round.
+// ---------------------------------------------------------------------------
+
+function refreshLanguage() {
+  if (!ui) return;
+  ui.updateTopbar(topbarVM());
+  ui.relabel();
+  const screen = ui.activeScreen;
+  if (screen === 'title') goTitle();
+  else if (screen === 'setup' && setupState) showSetup(setupState.flow);
+  else if (screen === 'results' && lastResultsView) showResults(lastResultsView[0], lastResultsView[1], true);
+  else if (screen && screen !== 'settings') showNavScreen(screen);
+  if (session && currentFlow) updatePlayHud();
 }
 
 // Debug/inspection handle (no privileged data; used by smoke tests).

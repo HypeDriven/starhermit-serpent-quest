@@ -7,6 +7,8 @@
 // no network requests at all. All network failures degrade to recoverable UI
 // states, never crashes.
 
+import { T } from './i18n.js';
+
 const SH = () => (typeof window !== 'undefined' && window.StarHermit) || globalThis.StarHermit || null;
 
 // Settings mirrored to the per-player KV (bindings use the controls API).
@@ -25,14 +27,17 @@ export function createPlatform() {
 
   async function nickname(userId) {
     const p = sh ? await sh.profile(userId).catch(() => null) : null;
-    return p ? p.displayName : 'Player ' + String(userId || '?').slice(0, 8);
+    return p ? p.displayName : T('Player {id}', { id: String(userId || '?').slice(0, 8) });
   }
 
-  // Cloud save: the SDK's game:<slug> slot, remote-preferred on load.
-  // localStorage stays the offline cache; the slot is a mirror. Saves
-  // debounce ~2 s and flush on pagehide/visibilitychange.
+  // Cloud save: the SDK's game:<slug> slot, merged with local progress on load
+  // (main.js). localStorage stays the offline cache; the slot is a mirror. Saves
+  // debounce ~2 s and flush on pagehide/visibilitychange. Writes after a load are
+  // conditional (SDK ETag): when another device saved first the SDK emits
+  // 'saveconflict'; the slot is reloaded and handed to onConflict for the merge.
   let cloudStatus = isHosted() ? 'idle' : 'offline';
   let cloudStatusCb = null;
+  let conflictCb = null;
   function setCloudStatus(s) {
     cloudStatus = s;
     if (cloudStatusCb) cloudStatusCb(s);
@@ -40,11 +45,17 @@ export function createPlatform() {
   if (sh) {
     sh.on('saved', (ok) => setCloudStatus(ok ? 'synced' : 'error'));
     sh.on('auth', (a) => { if (!a.signedIn) setCloudStatus('offline'); if (authCb) authCb(!!a.signedIn); });
+    sh.on('saveconflict', () => {
+      if (!isHosted()) return;
+      setCloudStatus('saving');
+      sh.loadJSON().then((remote) => { if (conflictCb) conflictCb(remote); }, () => setCloudStatus('error'));
+    });
   }
 
   const cloudSync = {
     get status() { return cloudStatus; },
     onStatus(cb) { cloudStatusCb = cb; },
+    onConflict(cb) { conflictCb = cb; },
     async load() {
       if (!isHosted()) return null;
       return sh.loadJSON();
@@ -62,7 +73,9 @@ export function createPlatform() {
   window.addEventListener('pagehide', () => { cloudSync.flush(); });
   document.addEventListener('visibilitychange', () => { if (document.hidden) cloudSync.flush(); });
 
-  const pickSettings = (settings) => Object.fromEntries(Object.keys(settings).filter((k) => !NOT_SETTINGS.has(k)).map((k) => [k, settings[k]]));
+  // Only the game's own keys: `ui.*` (the shared language choice, sh-language.js) is never read or patched here.
+  const ownKey = (k) => !NOT_SETTINGS.has(k) && !k.startsWith('ui.');
+  const pickSettings = (settings) => Object.fromEntries(Object.keys(settings).filter(ownKey).map((k) => [k, settings[k]]));
 
   return {
     get hosted() { return isHosted(); },
@@ -96,7 +109,7 @@ export function createPlatform() {
       const remote = await sh.getSettings().catch(() => ({}));
       let changed = false;
       for (const k of Object.keys(settings)) {
-        if (NOT_SETTINGS.has(k) || !remote || remote[k] === undefined || remote[k] === null) continue;
+        if (!ownKey(k) || !remote || remote[k] === undefined || remote[k] === null) continue;
         settings[k] = remote[k];
         changed = true;
       }
@@ -157,7 +170,7 @@ export function createPlatform() {
       return Promise.all(list.map(async (e) => {
         const uid = e.userId || e.user_id || e.playerId || null;
         return {
-          name: uid ? await nickname(uid) : 'Player',
+          name: uid ? await nickname(uid) : T('Player'),
           me: !!uid && uid === sh.userId,
           score: e.score ?? e.value ?? 0,
           won: !!e.won,

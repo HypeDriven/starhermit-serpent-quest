@@ -1,6 +1,7 @@
 // Local persistence: versioned, checksummed documents in localStorage.
 // Cloud sync is a host concern; this module is the durable local layer and
-// keeps both snapshots on conflict (see mergeProgression).
+// merges a cloud copy with the local one without dropping either side's
+// progress (mergeProgression / mergeBoards).
 
 import { hashString } from './rng.js';
 
@@ -112,17 +113,66 @@ export function saveProgression(p) {
   return safeSet('progression', wrap(p));
 }
 
-// Conflict handling: keep both snapshots; a strict descendant wins silently,
-// otherwise the player is asked (the UI surfaces `conflict` when present).
+// Conflict handling: merge, never drop. Per stage the better record (won,
+// best score, fewest ticks, most attempts); every lesson, achievement (earliest
+// unlock), unlocked cosmetic and played daily (better score); the larger
+// counters; the later daily streak; this device's equipped cosmetic.
+const n0 = (v) => (Number.isFinite(v) ? v : 0);
 export function mergeProgression(local, remote) {
-  if (!remote) return { merged: local, conflict: null };
-  const localClears = Object.keys(local.stages || {}).length;
-  const remoteClears = Object.keys(remote.stages || {}).length;
-  const localIsDescendant = localClears >= remoteClears && (local.totalRounds || 0) >= (remote.totalRounds || 0);
-  const remoteIsDescendant = remoteClears >= localClears && (remote.totalRounds || 0) >= (local.totalRounds || 0);
-  if (localIsDescendant) return { merged: local, conflict: null };
-  if (remoteIsDescendant) return { merged: remote, conflict: null };
-  return { merged: local, conflict: { local, remote } };
+  const d = structuredClone(DEFAULT_PROGRESSION);
+  const a = { ...d, ...(local || {}) };
+  const b = { ...d, ...(remote || {}) };
+  const out = { ...b, ...a };
+  out.stages = {};
+  for (const id of new Set([...Object.keys(a.stages || {}), ...Object.keys(b.stages || {})])) {
+    const x = a.stages?.[id], y = b.stages?.[id];
+    if (!x || !y) { out.stages[id] = { ...(x || y) }; continue; }
+    const rec = { ...y, ...x, won: !!(x.won || y.won), attempts: Math.max(n0(x.attempts), n0(y.attempts)) };
+    const best = Math.max(n0(x.bestScore), n0(y.bestScore));
+    if (best) rec.bestScore = best;
+    const ticks = [x.bestTicks, y.bestTicks].filter((t) => Number.isFinite(t) && t > 0);
+    if (ticks.length) rec.bestTicks = Math.min(...ticks);
+    out.stages[id] = rec;
+  }
+  out.tutorials = { ...(b.tutorials || {}), ...(a.tutorials || {}) };
+  out.achievements = {};
+  for (const k of new Set([...Object.keys(a.achievements || {}), ...Object.keys(b.achievements || {})])) {
+    const x = a.achievements?.[k], y = b.achievements?.[k];
+    out.achievements[k] = !x ? y : !y ? x : (n0(x.at) && n0(x.at) < n0(y.at) ? x : y);
+  }
+  out.masteryPoints = Math.max(n0(a.masteryPoints), n0(b.masteryPoints));
+  out.totalRounds = Math.max(n0(a.totalRounds), n0(b.totalRounds));
+  const unlocked = [...new Set([...(b.cosmetics?.unlocked || []), ...(a.cosmetics?.unlocked || [])])];
+  out.cosmetics = { unlocked, equipped: { ...(b.cosmetics?.equipped || {}), ...(a.cosmetics?.equipped || {}) } };
+  out.dailiesPlayed = {};
+  for (const day of new Set([...Object.keys(a.dailiesPlayed || {}), ...Object.keys(b.dailiesPlayed || {})])) {
+    const x = a.dailiesPlayed?.[day], y = b.dailiesPlayed?.[day];
+    out.dailiesPlayed[day] = !x ? y : !y ? x : (n0(x.score) >= n0(y.score) ? x : y);
+  }
+  const la = a.lastDailyDay || '', lb = b.lastDailyDay || '';
+  if (la === lb) out.currentStreakDays = Math.max(n0(a.currentStreakDays), n0(b.currentStreakDays));
+  else out.currentStreakDays = la > lb ? n0(a.currentStreakDays) : n0(b.currentStreakDays);
+  out.lastDailyDay = (la > lb ? la : lb) || null;
+  return out;
+}
+
+/** Merge local and cloud boards: the better entry per day/challenge, the union of chase runs (top 20). */
+export function mergeBoards(local, remote) {
+  const a = { daily: {}, chase: [], challenges: {}, ...(local || {}) };
+  const b = { daily: {}, chase: [], challenges: {}, ...(remote || {}) };
+  const out = { ...b, ...a, daily: {}, challenges: {} };
+  for (const key of ['daily', 'challenges']) {
+    for (const id of new Set([...Object.keys(a[key] || {}), ...Object.keys(b[key] || {})])) {
+      const x = a[key]?.[id], y = b[key]?.[id];
+      out[key][id] = !x ? y : !y ? x : (compareResults(x, y) <= 0 ? x : y);
+    }
+  }
+  const seen = new Set();
+  out.chase = [...(a.chase || []), ...(b.chase || [])]
+    .filter((e) => { const k = `${e.sessionId}|${e.score}|${e.when}`; if (seen.has(k)) return false; seen.add(k); return true; })
+    .sort(compareResults).slice(0, 20);
+  if (a.ghosts || b.ghosts) out.ghosts = { ...(b.ghosts || {}), ...(a.ghosts || {}) };
+  return out;
 }
 
 // --- Last safe snapshot (resume after crash/close) ---

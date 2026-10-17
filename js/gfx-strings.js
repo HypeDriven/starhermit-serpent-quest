@@ -1,6 +1,7 @@
-// Localized strings for the Graphics settings section. The rest of the game is
-// English-only; this panel follows the browser language (navigator.language)
-// with a fallback chain: exact tag → language family → en-US.
+// Localized strings for the Graphics settings section. The panel follows the
+// game language (i18n.js, i.e. the StarHermit Language setting) with a fallback
+// chain: exact tag → language family → en-US.
+import { getLang } from './i18n.js';
 
 const EN = {
   title: 'Graphics',
@@ -211,7 +212,7 @@ export function pickLocale(tag) {
   return FAMILY[lang] || 'en-US';
 }
 
-export function gfxStrings(tag) {
+export function gfxStrings(tag = getLang()) {
   return GFX_STRINGS[pickLocale(tag)];
 }
 
