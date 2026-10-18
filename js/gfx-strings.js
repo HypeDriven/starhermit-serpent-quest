@@ -28,7 +28,7 @@ const EN = {
   },
   sum: {
     noShadows: 'no shadows', shadows: 'shadows', ao: 'ambient occlusion', aoHigh: 'full ambient occlusion',
-    bloom: 'bloom', reflections: 'reflections', grass: 'grass blades', noAa: 'no anti-aliasing', gpu: 'unknown GPU',
+    bloom: 'bloom', reflections: 'reflections', grass: 'grass blades', noAa: 'no anti-aliasing', gpu: 'unknown GPU', level: 'Level {n}',
   },
 };
 
@@ -59,7 +59,7 @@ const ES = {
   },
   sum: {
     noShadows: 'sin sombras', shadows: 'sombras', ao: 'oclusión ambiental', aoHigh: 'oclusión ambiental completa',
-    bloom: 'resplandor', reflections: 'reflejos', grass: 'briznas de hierba', noAa: 'sin suavizado', gpu: 'GPU desconocida',
+    bloom: 'resplandor', reflections: 'reflejos', grass: 'briznas de hierba', noAa: 'sin suavizado', gpu: 'GPU desconocida', level: 'Nivel {n}',
   },
 };
 
@@ -95,7 +95,7 @@ const DE = {
   },
   sum: {
     noShadows: 'keine Schatten', shadows: 'Schatten', ao: 'Umgebungsverdeckung', aoHigh: 'volle Umgebungsverdeckung',
-    bloom: 'Leuchten', reflections: 'Reflexionen', grass: 'Grashalme', noAa: 'keine Kantenglättung', gpu: 'unbekannte GPU',
+    bloom: 'Leuchten', reflections: 'Reflexionen', grass: 'Grashalme', noAa: 'keine Kantenglättung', gpu: 'unbekannte GPU', level: 'Stufe {n}',
   },
 };
 
@@ -124,7 +124,7 @@ const FR = {
   },
   sum: {
     noShadows: 'sans ombres', shadows: 'ombres', ao: 'occlusion ambiante', aoHigh: 'occlusion ambiante complète',
-    bloom: 'halo', reflections: 'reflets', grass: 'brins d’herbe', noAa: 'sans anticrénelage', gpu: 'GPU inconnu',
+    bloom: 'halo', reflections: 'reflets', grass: 'brins d’herbe', noAa: 'sans anticrénelage', gpu: 'GPU inconnu', level: 'Niveau {n}',
   },
 };
 
@@ -160,7 +160,7 @@ const PT_BR = {
   },
   sum: {
     noShadows: 'sem sombras', shadows: 'sombras', ao: 'oclusão ambiente', aoHigh: 'oclusão ambiente completa',
-    bloom: 'brilho', reflections: 'reflexos', grass: 'folhas de grama', noAa: 'sem suavização', gpu: 'GPU desconhecida',
+    bloom: 'brilho', reflections: 'reflexos', grass: 'folhas de grama', noAa: 'sem suavização', gpu: 'GPU desconhecida', level: 'Nível {n}',
   },
 };
 
@@ -189,7 +189,7 @@ const IT = {
   },
   sum: {
     noShadows: 'senza ombre', shadows: 'ombre', ao: 'occlusione ambientale', aoHigh: 'occlusione ambientale completa',
-    bloom: 'bagliore', reflections: 'riflessi', grass: 'fili d’erba', noAa: 'senza anti-aliasing', gpu: 'GPU sconosciuta',
+    bloom: 'bagliore', reflections: 'riflessi', grass: 'fili d’erba', noAa: 'senza anti-aliasing', gpu: 'GPU sconosciuta', level: 'Livello {n}',
   },
 };
 

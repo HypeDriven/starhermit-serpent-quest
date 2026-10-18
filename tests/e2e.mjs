@@ -503,6 +503,7 @@ async function runGraphicsPass(browser, name, ctxOpts) {
     let a = await applied();
     if (a.body !== 'low' || a.canvas !== 'low' || a.summaryPreset !== 'low') throw new Error('Low not applied: ' + JSON.stringify(a));
     if (!/no shadows/.test(a.summary) && !/sombras|Schatten|ombres|ombre/.test(a.summary)) throw new Error('Low summary unexpected: ' + a.summary);
+    if (!/ · (Level|Nivel|Stufe|Niveau|Nível|Livello) 0 · /.test(a.summary)) throw new Error('summary lacks the hardware level: ' + a.summary);
 
     await page.selectOption('#set-gfx-preset', 'high');
     a = await applied();

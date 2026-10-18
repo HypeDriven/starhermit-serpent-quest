@@ -6,7 +6,7 @@
 // touches the DOM/WebGL.
 
 import * as THREE from '../vendor/three.module.js';
-import { detectPreset, resolve, SHADOW_MAP, FOLIAGE, PARTICLE_SCALE } from './gfx.js';
+import { detectLevel, presetForLevel, resolve, SHADOW_MAP, PARTICLE_SCALE, grassCount, flowerCount } from './gfx.js';
 
 // Post-processing and image-based-lighting addons (three r160, vendored under
 // vendor/addons and mapped by the page importmap). Loaded lazily the first
@@ -218,22 +218,28 @@ function greyTexture(size, fn, srgb) {
   }, srgb);
 }
 
-const TEX = {};
-function detailTextures() {
-  if (TEX.ground) return TEX;
+// Procedural detail textures per preset texture budget (`size` = ground px; leaf/scale maps half of it),
+// drawn once per size and shared by every arena built at that budget.
+const TEX_BY_SIZE = new Map();
+function detailTextures(size = 256) {
+  let TEX = TEX_BY_SIZE.get(size);
+  if (TEX) return TEX;
+  TEX = {};
+  TEX_BY_SIZE.set(size, TEX);
+  const G = size, L = size / 2;
   // Ground: soft mottling plus fine speckle, near-white so it only modulates
   // the theme's vertex colours (the cell checker stays readable).
-  const n = tileNoise(256, 0x9a55, 5);
+  const n = tileNoise(G, 0x9a55, 5);
   const sp = mulberry32(0x5eed5);
-  const speck = new Float32Array(256 * 256).map(() => sp());
-  TEX.ground = greyTexture(256, (x, y) => 0.8 + 0.2 * n[y * 256 + x] - (speck[y * 256 + x] > 0.985 ? 0.12 : 0), true);
-  TEX.groundBump = greyTexture(256, (x, y) => n[y * 256 + x] * 0.7 + speck[y * 256 + x] * 0.3, false);
+  const speck = new Float32Array(G * G).map(() => sp());
+  TEX.ground = greyTexture(G, (x, y) => 0.8 + 0.2 * n[y * G + x] - (speck[y * G + x] > 0.985 ? 0.12 : 0), true);
+  TEX.groundBump = greyTexture(G, (x, y) => n[y * G + x] * 0.7 + speck[y * G + x] * 0.3, false);
   // Hedge: clumpy leaves.
-  const leaf = tileNoise(128, 0x1eaf, 4);
-  TEX.leaf = greyTexture(128, (x, y) => 0.72 + 0.28 * Math.pow(leaf[y * 128 + x], 0.8), true);
-  TEX.leafBump = greyTexture(128, (x, y) => leaf[y * 128 + x], false);
+  const leaf = tileNoise(L, 0x1eaf, 4);
+  TEX.leaf = greyTexture(L, (x, y) => 0.72 + 0.28 * Math.pow(leaf[y * L + x], 0.8), true);
+  TEX.leafBump = greyTexture(L, (x, y) => leaf[y * L + x], false);
   // Serpent scales: offset rows of rounded scales (bump height).
-  TEX.scales = canvasTexture(128, (ctx, s) => {
+  TEX.scales = canvasTexture(L, (ctx, s) => {
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, s, s);
     const rows = 8, cols = 8, w = s / cols, h = s / rows;
@@ -264,6 +270,15 @@ function detailTextures() {
   return TEX;
 }
 
+// Run a post pass at a fraction of the frame: EffectComposer.addPass/setSize hand every pass the full
+// frame size, so the pass's own setSize applies the budget's scale (half-res bloom/GTAO below Ultra).
+function atScale(pass, k) {
+  if (!(k < 1)) return pass;
+  const setSize = pass.setSize.bind(pass);
+  pass.setSize = (w, h) => setSize(Math.max(1, Math.round(w * k)), Math.max(1, Math.round(h * k)));
+  return pass;
+}
+
 // Critically damped spring (explicit velocity state; no cumulative lerp).
 class Spring3 {
   constructor() {
@@ -289,8 +304,9 @@ class Spring3 {
 // ---------------------------------------------------------------------------
 
 class ParticlePool {
-  constructor(scene, dotTex) {
-    this.max = MAX_PARTICLES;
+  constructor(scene, dotTex, max = MAX_PARTICLES) {
+    this.max = max; // the preset's pool budget; bursts scale with it (authored for 640)
+    this.share = max / MAX_PARTICLES;
     this.pos = new Float32Array(this.max * 3);
     this.col = new Float32Array(this.max * 3);
     this.baseCol = new Float32Array(this.max * 3);
@@ -320,7 +336,7 @@ class ParticlePool {
   // tier: 0 small (eat/move), 1 medium (grow/rival), 2 large (win/death)
   burst(x, y, z, hex, tier, countScale) {
     const counts = [12, 30, 90];
-    let n = Math.round(counts[tier] * countScale);
+    let n = Math.round(counts[tier] * countScale * this.share);
     const c = new THREE.Color(hex);
     const speed = [1.6, 2.6, 4.2][tier];
     const up = [2.2, 3.2, 5.0][tier];
@@ -385,8 +401,8 @@ class ParticlePool {
 // ---------------------------------------------------------------------------
 
 class PollenField {
-  constructor(parent, dotTex, w, h, hex) {
-    this.n = POLLEN_COUNT;
+  constructor(parent, dotTex, w, h, hex, n = POLLEN_COUNT) {
+    this.n = n;
     this.base = new Float32Array(this.n * 4);
     this.pos = new Float32Array(this.n * 3);
     const r = mulberry32(0x9011e);
@@ -450,14 +466,22 @@ class SerpentView {
 
     // Detailed: glossy clear-coated scales (bump-mapped) that catch the
     // environment; plain: the original matte look.
-    const tex = opts.detail ? detailTextures() : null;
-    const skin = (params, clear) => (tex
-      ? new THREE.MeshPhysicalMaterial({
-        ...params, roughness: Math.max(0.3, params.roughness - 0.15),
-        clearcoat: clear, clearcoatRoughness: 0.3, envMapIntensity: 0.14,
-      })
-      : new THREE.MeshStandardMaterial({ ...params, envMapIntensity: 0.14 }));
-    const bodyGeom = new THREE.SphereGeometry(0.34 * this.scale, tex ? 20 : 14, tex ? 14 : 10);
+    // Shading per preset budget: Lambert (Low), Standard (Balanced), clear-coated Physical (High, Ultra).
+    const tex = opts.detail ? detailTextures(opts.texture) : null;
+    const tier = opts.material || 'standard';
+    const skin = (params, clear) => {
+      if (tier === 'lambert') return new THREE.MeshLambertMaterial({ color: params.color });
+      if (tex && tier === 'physical') {
+        return new THREE.MeshPhysicalMaterial({
+          ...params, roughness: Math.max(0.3, params.roughness - 0.15),
+          clearcoat: clear, clearcoatRoughness: 0.3, envMapIntensity: 0.14,
+        });
+      }
+      return new THREE.MeshStandardMaterial({ ...params, roughness: tex ? Math.max(0.3, params.roughness - 0.15) : params.roughness, envMapIntensity: 0.14 });
+    };
+    // Sphere segments per budget (authored 20×14 detailed / 14×10 plain).
+    const seg = opts.body || (tex ? 20 : 14), ring = Math.max(6, Math.round(seg * 0.7));
+    const bodyGeom = new THREE.SphereGeometry(0.34 * this.scale, seg, ring);
     this.bodyMat = skin({ color: 0xffffff, roughness: 0.55, metalness: 0 }, 0.4);
     if (tex) {
       this.bodyMat.bumpMap = tex.scales.clone();
@@ -471,7 +495,7 @@ class SerpentView {
     this.bodyMesh.frustumCulled = false;
     this.group.add(this.bodyMesh);
 
-    const bellyGeom = new THREE.SphereGeometry(0.30 * this.scale, 12, 8);
+    const bellyGeom = new THREE.SphereGeometry(0.30 * this.scale, Math.min(12, seg), Math.min(8, ring));
     bellyGeom.scale(0.82, 0.5, 0.82);
     this.bellyMat = skin({ color: 0xffffff, roughness: 0.7, metalness: 0 }, 0.2);
     this.bellyMesh = new THREE.InstancedMesh(bellyGeom, this.bellyMat, this.maxSamples);
@@ -494,7 +518,7 @@ class SerpentView {
     this.head = new THREE.Group();
     const headMat = skin({ color: opts.headColor, roughness: 0.5, metalness: 0 }, 0.5);
     this.headMat = headMat;
-    const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.4 * this.scale, 18, 14), headMat);
+    const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.4 * this.scale, Math.max(12, seg), Math.max(10, ring)), headMat);
     headMesh.scale.set(1, 0.92, 1.08);
     headMesh.castShadow = true;
     this.head.add(headMesh);
@@ -681,8 +705,15 @@ export function createRenderer(opts) {
   } catch (e) { gpu = ''; }
   const mobile = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches &&
     typeof navigator !== 'undefined' && (navigator.maxTouchPoints || 0) > 0;
-  const detected = detectPreset(gpu, { mobile });
-  let gq = resolve({ preset: 'auto' }, detected); // resolved graphics settings
+  // StarHermit hardware level (js/gpu-level.js): renderer string + device facts (phone/tablet, cores, memory).
+  let sys = { mobile, webgl2: !!renderer.capabilities.isWebGL2 };
+  try {
+    const SG = globalThis.StarHermitGpu;
+    if (SG) { const d = SG.detectSystem(); sys = { ...sys, mobile: mobile || d.mobile, touch: d.touch, screen: d.screen, cores: d.cores, memoryGb: d.memoryGb, astc: d.astc }; }
+  } catch (e) { /* defaults */ }
+  const gpuLevel = detectLevel(gpu, sys);
+  const detected = presetForLevel(gpuLevel);
+  let gq = resolve({ preset: 'auto' }, detected, gpuLevel); // resolved graphics settings
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(CAMERA_FOV, 1, 0.1, 400);
@@ -804,7 +835,34 @@ export function createRenderer(opts) {
   }
 
   function isSharedTexture(t) {
-    return Object.values(TEX).includes(t);
+    for (const TEX of TEX_BY_SIZE.values()) if (Object.values(TEX).includes(t)) return true;
+    return false;
+  }
+
+  // The preset budget's shading model for the arena decor: Standard surfaces become Lambert on Low;
+  // clear-coated Physical ones (detailed food) step down to Standard on Balanced and Lambert on Low.
+  // Colour, maps, vertex/instance colours, emissive and the grass wind shader carry over.
+  function shadeTree(root) {
+    const tier = gq.budget.material;
+    if (tier === 'physical') return;
+    const done = new Map();
+    root.traverse((o) => {
+      if (!o.isMesh || !o.material || Array.isArray(o.material)) return;
+      const old = o.material;
+      if (!(old.isMeshStandardMaterial)) return;
+      if (tier === 'standard' && !old.isMeshPhysicalMaterial) return;
+      let m = done.get(old);
+      if (!m) {
+        m = tier === 'lambert' ? new THREE.MeshLambertMaterial() : new THREE.MeshStandardMaterial();
+        for (const k of ['map', 'bumpMap', 'bumpScale', 'vertexColors', 'transparent', 'opacity', 'depthWrite', 'side', 'flatShading', 'onBeforeCompile', 'customProgramCacheKey']) m[k] = old[k];
+        m.color.copy(old.color); m.emissive.copy(old.emissive); m.emissiveIntensity = old.emissiveIntensity;
+        m.userData = { ...old.userData };
+        if (tier === 'standard') { m.roughness = old.roughness; m.metalness = old.metalness; m.envMapIntensity = old.envMapIntensity; }
+        old.dispose();
+        done.set(old, m);
+      }
+      o.material = m;
+    });
   }
 
   function buildGround(rng) {
@@ -826,7 +884,7 @@ export function createRenderer(opts) {
       colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
     }
     geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    const tex = gq.detail === 'detailed' ? detailTextures() : null;
+    const tex = gq.detail === 'detailed' ? detailTextures(gq.budget.texture) : null;
     const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, envMapIntensity: 0.06 });
     if (tex) {
       mat.map = tex.ground.clone(); mat.map.needsUpdate = true; mat.map.repeat.set(gridW / 5, gridH / 5);
@@ -961,7 +1019,7 @@ export function createRenderer(opts) {
   function hedgeMaterial() {
     const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, envMapIntensity: 0.08 });
     if (gq.detail === 'detailed') {
-      const tex = detailTextures();
+      const tex = detailTextures(gq.budget.texture);
       mat.map = tex.leaf.clone(); mat.map.needsUpdate = true; mat.map.repeat.set(2, 1);
       mat.bumpMap = tex.leafBump.clone(); mat.bumpMap.needsUpdate = true; mat.bumpMap.repeat.set(2, 1);
       mat.bumpScale = 3;
@@ -1257,20 +1315,20 @@ export function createRenderer(opts) {
     const rng = mulberry32((cfg.seed ^ 0xdec0) >>> 0);
     const obstacles = cfg.obstacles || [];
     const obstacleSet = new Set(obstacles.map((c) => c.x + ',' + c.y));
-    const foliage = FOLIAGE[gq.foliage];
     const palette = readSettings().colorPalette;
 
     buildGround(rng);
-    buildGrass(foliage.grass, rng, obstacleSet);
-    buildFlowers(foliage.flowers, rng, obstacleSet);
+    buildGrass(grassCount(gq), rng, obstacleSet);
+    buildFlowers(flowerCount(gq), rng, obstacleSet);
     buildHedgeWall(rng);
     buildObstacles(obstacles);
     buildFoodPool(palette);
     buildMarkers();
 
-    const dot = gq.detail === 'detailed' ? detailTextures().dot : null;
-    particles = new ParticlePool(world, dot);
-    pollen = gq.particles === 'high' ? new PollenField(world, dot || detailTextures().dot, gridW, gridH, theme.foodGolden) : null;
+    const dot = gq.detail === 'detailed' ? detailTextures(gq.budget.texture).dot : null;
+    particles = new ParticlePool(world, dot, gq.budget.particles);
+    pollen = gq.particles === 'high' ? new PollenField(world, dot || detailTextures(gq.budget.texture).dot, gridW, gridH, theme.foodGolden, gq.budget.pollen) : null;
+    shadeTree(world);
     applyThemeToLights();
     positionLights();
 
@@ -1607,11 +1665,11 @@ export function createRenderer(opts) {
         ao.blendIntensity = gq.ao === 'high' ? 0.8 : 0.65;
         ao.updateGtaoMaterial({ radius: 0.45, distanceExponent: 1.5, thickness: 1.0, scale: 1.0, samples: gq.ao === 'high' ? 16 : 8 });
         ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: gq.ao === 'high' ? 6 : 4, rings: 2, samples: gq.ao === 'high' ? 16 : 8 });
-        c.addPass(ao);
+        c.addPass(atScale(ao, gq.budget.aoRes));
       }
       if (gq.bloom === 'on') {
         // High threshold: only golden food, particles and bright glints bloom.
-        c.addPass(new A.UnrealBloomPass(new THREE.Vector2(w, h), 0.35, 0.35, 0.92));
+        c.addPass(atScale(new A.UnrealBloomPass(new THREE.Vector2(w, h), 0.35, 0.35, 0.92), gq.budget.bloomRes));
       }
       if (gq.grade === 'on') c.addPass(new A.ShaderPass(GradeShader));
       c.addPass(new A.OutputPass());
@@ -1681,6 +1739,7 @@ export function createRenderer(opts) {
       if (!playerView) {
         playerView = new SerpentView(world, {
           scale: 1, spiky: false, maxJoints: MAX_JOINTS, detail: gq.detail === 'detailed',
+          material: gq.budget.material, texture: gq.budget.texture, body: gq.budget.body,
           headColor: theme.snakeHead, bodyColor: theme.snakeBody, bellyColor: theme.snakeBelly,
         });
       }
@@ -1696,6 +1755,7 @@ export function createRenderer(opts) {
             scale: big ? 1.3 : 0.72,
             spiky: big,
             maxJoints: RIVAL_MAX_JOINTS, detail: gq.detail === 'detailed',
+            material: gq.budget.material, texture: gq.budget.texture, body: Math.max(8, Math.round(gq.budget.body * 0.75)),
             headColor: adjustForPalette(big ? theme.rivalBig : theme.rivalSmall, big ? 'rivalBig' : 'rivalSmall', palette),
             bodyColor: adjustForPalette(big ? theme.rivalBig : theme.rivalSmall, big ? 'rivalBig' : 'rivalSmall', palette),
             bellyColor: theme.snakeBelly,
@@ -1864,8 +1924,10 @@ export function createRenderer(opts) {
     /** Apply saved graphics settings live: { preset, render_scale, adaptive, show_fps, <category> }. */
     setGraphics(saved) {
       const prev = gq;
-      gq = resolve(saved || {}, detected);
-      const rebuild = prev.foliage !== gq.foliage || prev.detail !== gq.detail || prev.particles !== gq.particles;
+      gq = resolve(saved || {}, detected, gpuLevel);
+      const assets = (b) => [b.material, b.texture, b.body, b.grass, b.particles, b.pollen].join('|');
+      const rebuild = prev.foliage !== gq.foliage || prev.detail !== gq.detail || prev.particles !== gq.particles ||
+        assets(prev.budget) !== assets(gq.budget);
       applyShadowSize();
       markMaterialsDirty(); // shadow-map state is baked into programs
       if (needsAddons()) loadAddons();
@@ -1892,7 +1954,7 @@ export function createRenderer(opts) {
     /** What the Graphics panel shows: GPU, auto choice, resolved tiers, pixels, frame rate. */
     graphicsInfo() {
       return {
-        gpu, detected, resolved: gq,
+        gpu, level: gpuLevel, detected, resolved: gq,
         pixels: [Math.round(sizeW * pixelRatio), Math.round(sizeH * pixelRatio)],
         fps: Math.round(fps), adaptiveScale: Math.round(adaptiveScale * 100) / 100,
         postFailed, postActive: !!composer,

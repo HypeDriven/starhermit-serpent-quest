@@ -9,9 +9,13 @@ import {
 } from '../js/content.js';
 import { hashString, seedFromString } from '../js/rng.js';
 import { validateScoreClaim } from '../server.js';
+import { readFileSync } from 'node:fs';
 import {
   detectPreset, resolve, presetTier, choosePreset, describe, normalizePreset, CATEGORIES, PRESETS,
+  detectLevel, presetForLevel, budgetFor, grassCount, LEVELS, BUDGETS, PARTICLE_MAX, POLLEN_MAX,
 } from '../js/gfx.js';
+// js/gpu-level.js is a classic script in the page (window.StarHermitGpu); evaluate it the same way here.
+new Function('window', 'module', readFileSync(new URL('../js/gpu-level.js', import.meta.url), 'utf8'))(globalThis, undefined);
 import { GFX_STRINGS, pickLocale, gfxStrings } from '../js/gfx-strings.js';
 
 let passed = 0, failed = 0;
@@ -417,15 +421,42 @@ test('golden hashes: pinned deterministic outcomes', () => {
 
 // --- Graphics quality model (js/gfx.js) ---------------------------------------
 
-test('gfx: detectPreset maps GPU strings to presets', () => {
-  eq(detectPreset('ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)'), 'low');
-  eq(detectPreset('llvmpipe (LLVM 15.0.7, 256 bits)'), 'low');
-  eq(detectPreset('ANGLE (NVIDIA, NVIDIA GeForce RTX 3070 Direct3D11 vs_5_0 ps_5_0, D3D11)'), 'high');
-  eq(detectPreset('Apple M2'), 'high');
-  eq(detectPreset('ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)'), 'balanced');
-  eq(detectPreset('Adreno (TM) 650'), 'balanced');
-  eq(detectPreset(''), 'balanced');
-  eq(detectPreset('Apple M2', { mobile: true }), 'balanced', 'mobile Auto caps at Balanced');
+const DESK = { cores: 8, memoryGb: 8 };
+const PHONE = { mobile: true, cores: 8, memoryGb: 8 };
+test('gfx: hardware level picks the Auto preset (Low 0, Balanced 4, High 10, Ultra 17)', () => {
+  eq(detectPreset('ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)', DESK), 'low');
+  eq(detectLevel('llvmpipe (LLVM 15.0.7, 256 bits)', DESK), 0);
+  eq(detectPreset('', DESK), 'low', 'no WebGL');
+  eq(detectPreset('ANGLE (AMD, AMD Radeon(TM) Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', DESK), 'low');
+  eq(detectPreset('ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)', DESK), 'low');
+  eq(detectPreset('ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11)', DESK), 'balanced');
+  eq(detectPreset('ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 Direct3D11 vs_5_0 ps_5_0)', DESK), 'high');
+  eq(detectPreset('ANGLE (NVIDIA, NVIDIA GeForce RTX 4080 Direct3D11 vs_5_0 ps_5_0)', DESK), 'ultra');
+  eq(detectLevel('ANGLE (NVIDIA, NVIDIA GeForce RTX 5090 Direct3D11 vs_5_0 ps_5_0)', DESK), 20);
+  eq(detectPreset('ANGLE (NVIDIA, NVIDIA GeForce RTX 5090 Direct3D11 vs_5_0 ps_5_0)', DESK), 'ultra');
+  for (const [p, lv] of Object.entries(LEVELS)) eq(presetForLevel(lv), p);
+  eq(presetForLevel(3), 'low'); eq(presetForLevel(16), 'high');
+});
+test('gfx: phones and tablets are Balanced at most; software GPUs stay Low', () => {
+  eq(detectPreset('Adreno (TM) 740', PHONE), 'balanced');
+  ok(detectLevel('Adreno (TM) 740', PHONE) <= 9);
+  eq(detectPreset('Apple M2', PHONE), 'balanced');
+  eq(detectPreset('SwiftShader', PHONE), 'low');
+});
+test('gfx: per-preset budgets are explicit, grow from Low to Ultra and scale with the level', () => {
+  const keys = ['material', 'texture', 'body', 'grass', 'particles', 'pollen', 'bloomRes', 'aoRes'];
+  for (const p of PRESETS) for (const k of keys) ok(BUDGETS[p][k] != null, `${p}.${k}`);
+  for (let i = 1; i < PRESETS.length; i++) for (const k of keys) {
+    if (typeof BUDGETS.low[k] === 'number') ok(BUDGETS[PRESETS[i]][k] >= BUDGETS[PRESETS[i - 1]][k], `${PRESETS[i]}.${k}`);
+  }
+  eq(PRESETS.map((p) => BUDGETS[p].material), ['lambert', 'standard', 'physical', 'physical']);
+  eq(PRESETS.map((p) => BUDGETS[p].bloomRes), [0.5, 0.5, 0.5, 1], 'half-res bloom below Ultra');
+  eq(resolve({ preset: 'high' }, 'low', 10).budget, BUDGETS.high, 'floor level = the tuned budget');
+  eq(resolve({ preset: 'ultra' }, 'low', 0).budget, resolve({ preset: 'ultra' }, 'ultra', 17).budget);
+  ok(budgetFor('balanced', 9).pollen > budgetFor('balanced', 4).pollen, 'counts scale up within the preset');
+  ok(budgetFor('ultra', 20).particles <= PARTICLE_MAX && budgetFor('ultra', 20).pollen <= POLLEN_MAX);
+  eq(grassCount(resolve({ preset: 'high' }, 'low', 10)), 6000, 'High at its floor plants the authored dense grass');
+  eq(resolve({}, 'low', 0).budget.material, 'lambert', 'headless SwiftShader: Low, Lambert');
 });
 
 test('gfx: resolve uses the detected preset for Auto and honours overrides', () => {

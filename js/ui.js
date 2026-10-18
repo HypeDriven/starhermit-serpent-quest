@@ -365,7 +365,7 @@ export function createUI({ onAction }) {
           }))));
 
       const summary = info
-        ? `${info.gpu || L.sum.gpu} · ${describe(info.resolved, info.pixels, L.sum)}`
+        ? [info.gpu || L.sum.gpu, info.level != null ? L.sum.level.replace('{n}', info.level) : null, describe(info.resolved, info.pixels, L.sum)].filter(Boolean).join(' · ')
         : '';
       card.append(el('p', { class: 'hint gfx-summary', id: 'gfx-summary', 'data-gfx-preset': info ? info.resolved.preset : '', text: summary }));
       if (info && info.postFailed) card.append(el('p', { class: 'hint gfx-warn', id: 'gfx-post-note', role: 'status', text: L.postFailed }));
