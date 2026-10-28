@@ -189,3 +189,17 @@ suite and the browser e2e (both pass). Original defect numbers retained for trac
   beyond confirming the page raises no WebGL or console errors on boot.
 - **Cloud-save conflict UI**: `mergeProgression` was read but the conflict branch was not exercised,
   as it requires two divergent cloud documents.
+
+## Engine port — 2026-10-28
+
+The browser client (DOM + three.js r160) is replaced by a StarHermit engine script game (engine 1.20.1,
+minor 20); see spec.md §0. Rules, content and session timing decisions are unchanged (the session now
+takes its clock from the engine's fixed steps). Behaviour notes from the port:
+
+- The hint arrows now point toward the safe cells; the browser build drew "up" and "down" pointing back
+  at the head (its arrow cone was rotated by 0 for up).
+- Rivals spawn at random free cells and can catch the serpent within the first ticks of some gardens
+  (e.g. Practice: Brisk on the meadow, where a hunter ends the round at tick 1). Kept: replays and the
+  golden hashes depend on the rules.
+- Back from a setup screen returns to the screen it was opened from (the browser build skipped back to
+  the screen before that).
