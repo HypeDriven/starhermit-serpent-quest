@@ -1,16 +1,36 @@
 name=Serpent Quest
 description=Steer a growing serpent through garden arenas, collecting food and defeating smaller rivals while avoiding larger threats.
-launch=index.html
 owner=2712e04e-461b-4d23-81ae-e40b429128a8
 server=score-script.js
 cover=cover.jpg
 
-# Keyboard actions (KeyboardEvent.code; remappable in Settings and via the platform controls API).
+launch=index.html
+engine.api=1
+engine.entry=native/main.ts
+engine.version=1.20.1
+engine.minor=20
+engine.capabilities=platform,storage,clipboard
+
+# Keyboard controls (players rebind keys and pads in the runtime's Options).
+# Touch screens swipe on the garden, tap a tile, or use the on-screen pad.
+engine.group.up=Steering
 control.up=ArrowUp+KeyW | Steer up
 control.down=ArrowDown+KeyS | Steer down
 control.left=ArrowLeft+KeyA | Steer left
 control.right=ArrowRight+KeyD | Steer right
+engine.group.pause=Round
 control.pause=Escape+KeyP | Pause / back
 control.undo=KeyZ+Backspace | Undo (practice)
 control.hint=KeyH | Hint
 control.camera_reset=KeyC | Reset camera
+
+# Gamepad defaults (the browser build's pad mapping): the D-pad or left stick
+# steers, A hints, B undoes, Start pauses.
+engine.gamepad.up=DpadUp+LeftStickUp
+engine.gamepad.down=DpadDown+LeftStickDown
+engine.gamepad.left=DpadLeft+LeftStickLeft
+engine.gamepad.right=DpadRight+LeftStickRight
+engine.gamepad.pause=Start
+engine.gamepad.hint=South
+engine.gamepad.undo=East
+engine.gamepad.camera_reset=RightStickPress

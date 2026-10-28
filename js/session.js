@@ -2,13 +2,18 @@
 // Only this module may advance rules state, and only through validated commands.
 // Rendering consumes immutable snapshots + interpolation alpha; UI state and
 // simulation state are strictly separate.
+//
+// Time comes from the host: advance(dtMs) is called on every fixed step (the
+// engine client calls it 60 times a second with 1000/60 ms), so the countdown
+// and the rules ticks are deterministic — the same inputs on the same steps
+// replay exactly. (The browser build read performance.now() each animation
+// frame; a hidden page is paused by the host instead of a clamped gap.)
 
 import {
   createGame, applyCommand, advanceTick, serializeState, deserializeState,
   hashState, getLegalActions, getSafeTurns, cloneState,
 } from './rules.js';
 import { hashString, canonicalJson } from './rng.js';
-import { clearSnapshot } from './storage.js';
 
 export const BUILD_VERSION = '1.0.0';
 
@@ -43,14 +48,12 @@ export class GameSession {
     this._seenCommandIds = new Set();
     this._undoStack = [];
     this._accumulator = 0;
-    this._lastTime = 0;
     this._running = false;
     this._paused = false;
-    this._rafId = 0;
     this.elapsedMs = 0;
     this.countdownRemaining = 0;
     this._phase = 'countdown'; // countdown -> active -> resolving -> done
-    this._countdownEnd = 0;
+    this._countdownLeftMs = 0;
   }
 
   get tickMs() {
@@ -71,40 +74,28 @@ export class GameSession {
 
   start(countdownSeconds = 3) {
     this._phase = 'countdown';
-    this._countdownEnd = performance.now() + countdownSeconds * 1000;
-    this._lastTime = performance.now();
+    this._countdownLeftMs = countdownSeconds * 1000;
+    this.countdownRemaining = countdownSeconds;
     this._running = true;
-    const loop = (now) => {
-      if (!this._running) return;
-      this._rafId = requestAnimationFrame(loop);
-      this._frame(now);
-    };
-    this._rafId = requestAnimationFrame(loop);
     this.onEvent({ type: 'session-start', sessionId: this.sessionId });
   }
 
   destroy() {
     this._running = false;
-    cancelAnimationFrame(this._rafId);
   }
 
-  _frame(now) {
-    const dt = Math.min(250, now - this._lastTime); // clamp tab-switch gaps
-    this._lastTime = now;
-
-    if (this._paused) {
-      if (this._phase === 'countdown') this._countdownEnd += dt; // freeze the countdown clock
-      return;
-    }
+  /** One host step of dtMs milliseconds (the engine client: every fixed step, 1000/60 ms). */
+  advance(dt) {
+    if (!this._running || this._paused) return;
 
     if (this._phase === 'countdown') {
-      const remaining = (this._countdownEnd - now) / 1000;
+      this._countdownLeftMs -= dt;
       const prev = Math.ceil(this.countdownRemaining);
-      this.countdownRemaining = Math.max(0, remaining);
+      this.countdownRemaining = Math.max(0, this._countdownLeftMs / 1000);
       if (Math.ceil(this.countdownRemaining) !== prev) {
         this.onEvent({ type: 'countdown', value: Math.ceil(this.countdownRemaining) });
       }
-      if (remaining <= 0) {
+      if (this._countdownLeftMs <= 0) {
         this._phase = 'active';
         this.onEvent({ type: 'countdown', value: 0 });
         this.onEvent({ type: 'go' });
@@ -115,10 +106,10 @@ export class GameSession {
 
     this.elapsedMs += dt;
     this._accumulator += dt;
-    // Fixed simulation step; never more than 8 catch-up ticks per frame.
+    // Fixed simulation step; never more than 8 catch-up ticks per step.
     let steps = 0;
-    while (this._accumulator >= this.tickMs && steps < 8 && this._phase === 'active') {
-      this._accumulator -= this.tickMs;
+    while (this._accumulator >= this.tickMs - 1e-6 && steps < 8 && this._phase === 'active') {
+      this._accumulator = Math.max(0, this._accumulator - this.tickMs);
       this._tick();
       steps++;
     }
@@ -194,7 +185,6 @@ export class GameSession {
   resume() {
     if (!this._paused) return;
     this._paused = false;
-    this._lastTime = performance.now();
     this.onEvent({ type: 'resume' });
   }
 
@@ -218,7 +208,6 @@ export class GameSession {
       finalHash,
     };
     this.replay.hashes.push({ tick: this.state.tick, hash: finalHash });
-    clearSnapshot();
     const results = this.getResults();
     this._phase = 'done';
     this.onEvent({ type: 'resolved', results });

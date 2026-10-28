@@ -4,3 +4,5 @@ node_modules/
 .DS_Store
 test-results/
 .tmp-build/
+.starhermit/
+tests/native/daily.today.play

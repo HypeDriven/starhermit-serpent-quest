@@ -1,0 +1,12 @@
+# Development files the engine leaves out of the package (besides its default
+# rules: dot-names, node_modules/, package.json, tsconfig.json, …).
+tests/
+tools/
+spec.md
+knownissues.md
+LICENSE.md
+coverart.png
+sfx/manifest.json
+sfx/manifest.md
+test-results/
+server.js

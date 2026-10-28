@@ -1,15 +1,19 @@
 {
   "name": "serpent-quest",
   "version": "1.0.0",
-  "description": "Serpent Quest — steer a growing serpent through colorful garden arenas.",
+  "description": "Serpent Quest \u2014 steer a growing serpent through colorful garden arenas, on the StarHermit engine.",
   "type": "module",
   "private": true,
   "scripts": {
-    "test": "node tests/run-tests.mjs && node --test tests/platform.test.mjs tests/i18n.test.mjs tests/storage.test.mjs",
-    "record-golden": "node tests/record-golden.mjs",
-    "serve": "python3 -m http.server 8080",
-    "server": "node server.js 8787",
-    "test:e2e": "node tests/e2e.mjs"
+    "test": "npm run test:unit && npm run test:native",
+    "test:unit": "node tests/run-tests.mjs && node --test tests/progress.test.mjs tests/i18n.test.mjs",
+    "test:native": "node tests/native.mjs",
+    "test:browser": "node tools/browser-play.mjs .",
+    "package": "node tools/package-web.mjs",
+    "css": "node tools/css.mjs",
+    "plays": "node tools/gen-plays.mjs",
+    "bake": "node tools/bake-textures.mjs",
+    "record-golden": "node tests/record-golden.mjs"
   },
   "devDependencies": {
     "playwright-core": "^1.62.1"
