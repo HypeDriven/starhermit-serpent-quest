@@ -9,15 +9,6 @@ import {
 } from '../js/content.js';
 import { hashString, seedFromString } from '../js/rng.js';
 import { validateScoreClaim } from '../server.js';
-import { readFileSync } from 'node:fs';
-import {
-  detectPreset, resolve, presetTier, choosePreset, describe, normalizePreset, CATEGORIES, PRESETS,
-  detectLevel, presetForLevel, budgetFor, grassCount, LEVELS, BUDGETS, PARTICLE_MAX, POLLEN_MAX,
-} from '../js/gfx.js';
-// js/gpu-level.js is a classic script in the page (window.StarHermitGpu); evaluate it the same way here.
-new Function('window', 'module', readFileSync(new URL('../js/gpu-level.js', import.meta.url), 'utf8'))(globalThis, undefined);
-import { GFX_STRINGS, pickLocale, gfxStrings } from '../js/gfx-strings.js';
-
 let passed = 0, failed = 0;
 const failures = [];
 function test(name, fn) {
@@ -417,96 +408,6 @@ test('golden hashes: pinned deterministic outcomes', () => {
   const rd = runReplay(toRulesConfig(d), []);
   eq(rd.finalHash, GOLDEN.daily, 'daily golden hash');
   eq(contentHash(), GOLDEN.content, 'content fingerprint');
-});
-
-// --- Graphics quality model (js/gfx.js) ---------------------------------------
-
-const DESK = { cores: 8, memoryGb: 8 };
-const PHONE = { mobile: true, cores: 8, memoryGb: 8 };
-test('gfx: hardware level picks the Auto preset (Low 0, Balanced 4, High 10, Ultra 17)', () => {
-  eq(detectPreset('ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)', DESK), 'low');
-  eq(detectLevel('llvmpipe (LLVM 15.0.7, 256 bits)', DESK), 0);
-  eq(detectPreset('', DESK), 'low', 'no WebGL');
-  eq(detectPreset('ANGLE (AMD, AMD Radeon(TM) Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', DESK), 'low');
-  eq(detectPreset('ANGLE (Intel, Intel(R) UHD Graphics 620 Direct3D11 vs_5_0 ps_5_0, D3D11)', DESK), 'low');
-  eq(detectPreset('ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11)', DESK), 'balanced');
-  eq(detectPreset('ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 Direct3D11 vs_5_0 ps_5_0)', DESK), 'high');
-  eq(detectPreset('ANGLE (NVIDIA, NVIDIA GeForce RTX 4080 Direct3D11 vs_5_0 ps_5_0)', DESK), 'ultra');
-  eq(detectLevel('ANGLE (NVIDIA, NVIDIA GeForce RTX 5090 Direct3D11 vs_5_0 ps_5_0)', DESK), 20);
-  eq(detectPreset('ANGLE (NVIDIA, NVIDIA GeForce RTX 5090 Direct3D11 vs_5_0 ps_5_0)', DESK), 'ultra');
-  for (const [p, lv] of Object.entries(LEVELS)) eq(presetForLevel(lv), p);
-  eq(presetForLevel(3), 'low'); eq(presetForLevel(16), 'high');
-});
-test('gfx: phones and tablets are Balanced at most; software GPUs stay Low', () => {
-  eq(detectPreset('Adreno (TM) 740', PHONE), 'balanced');
-  ok(detectLevel('Adreno (TM) 740', PHONE) <= 9);
-  eq(detectPreset('Apple M2', PHONE), 'balanced');
-  eq(detectPreset('SwiftShader', PHONE), 'low');
-});
-test('gfx: per-preset budgets are explicit, grow from Low to Ultra and scale with the level', () => {
-  const keys = ['material', 'texture', 'body', 'grass', 'particles', 'pollen', 'bloomRes', 'aoRes'];
-  for (const p of PRESETS) for (const k of keys) ok(BUDGETS[p][k] != null, `${p}.${k}`);
-  for (let i = 1; i < PRESETS.length; i++) for (const k of keys) {
-    if (typeof BUDGETS.low[k] === 'number') ok(BUDGETS[PRESETS[i]][k] >= BUDGETS[PRESETS[i - 1]][k], `${PRESETS[i]}.${k}`);
-  }
-  eq(PRESETS.map((p) => BUDGETS[p].material), ['lambert', 'standard', 'physical', 'physical']);
-  eq(PRESETS.map((p) => BUDGETS[p].bloomRes), [0.5, 0.5, 0.5, 1], 'half-res bloom below Ultra');
-  eq(resolve({ preset: 'high' }, 'low', 10).budget, BUDGETS.high, 'floor level = the tuned budget');
-  eq(resolve({ preset: 'ultra' }, 'low', 0).budget, resolve({ preset: 'ultra' }, 'ultra', 17).budget);
-  ok(budgetFor('balanced', 9).pollen > budgetFor('balanced', 4).pollen, 'counts scale up within the preset');
-  ok(budgetFor('ultra', 20).particles <= PARTICLE_MAX && budgetFor('ultra', 20).pollen <= POLLEN_MAX);
-  eq(grassCount(resolve({ preset: 'high' }, 'low', 10)), 6000, 'High at its floor plants the authored dense grass');
-  eq(resolve({}, 'low', 0).budget.material, 'lambert', 'headless SwiftShader: Low, Lambert');
-});
-
-test('gfx: resolve uses the detected preset for Auto and honours overrides', () => {
-  const auto = resolve({}, 'low');
-  eq([auto.preset, auto.auto, auto.shadows, auto.post], ['low', true, 'off', false]);
-  const high = resolve({ preset: 'high' }, 'low');
-  eq([high.preset, high.auto, high.shadows, high.ao, high.antialias, high.post], ['high', false, 'medium', 'on', 'smaa', true]);
-  const over = resolve({ preset: 'high', bloom: 'off', shadows: 'high', foliage: 'bogus' }, 'low');
-  eq([over.bloom, over.shadows, over.foliage], ['off', 'high', 'dense'], 'valid overrides win, invalid ones fall back');
-  eq(resolve({ preset: 'medium' }, 'low').preset, 'balanced', 'old "medium" maps to Balanced');
-  eq(normalizePreset('weird'), 'auto');
-});
-
-test('gfx: render scale is clamped to 50–200% and multiplies the preset scale', () => {
-  eq(resolve({ preset: 'high', render_scale: 5 }, 'low').scale, 2);
-  eq(resolve({ preset: 'high', render_scale: 0.1 }, 'low').scale, 0.5);
-  eq(resolve({ preset: 'ultra', render_scale: 1 }, 'low').scale, 1.25);
-  eq(resolve({ preset: 'low' }, 'low').dprCap, 1, 'Low caps the pixel ratio at 1');
-  eq([resolve({}, 'low').adaptive, resolve({ adaptive: false }, 'low').adaptive, resolve({ show_fps: true }, 'low').showFps], [true, false, true]);
-});
-
-test('gfx: choosing a preset clears overrides but keeps scale/adaptive/fps', () => {
-  const next = choosePreset({ preset: 'high', bloom: 'off', ao: 'high', render_scale: 1.5, adaptive: false, show_fps: true }, 'low');
-  eq(next, { preset: 'low', render_scale: 1.5, adaptive: false, show_fps: true });
-  for (const cat of Object.keys(CATEGORIES)) ok(next[cat] === undefined, cat + ' cleared');
-});
-
-test('gfx: every preset defines every category with a valid tier; describe summarizes', () => {
-  for (const p of PRESETS) {
-    for (const [cat, tiers] of Object.entries(CATEGORIES)) ok(tiers.includes(presetTier(p, cat)), `${p}.${cat}`);
-  }
-  const d = describe(resolve({ preset: 'high' }, 'low'), [1280, 800]);
-  ok(/2048² shadows/.test(d) && /SMAA/.test(d) && /1280×800 px/.test(d), d);
-  ok(/no shadows/.test(describe(resolve({ preset: 'low' }, 'low'))), 'low summary');
-});
-
-test('gfx: panel strings exist for every required locale', () => {
-  const need = ['en-US', 'en-GB', 'es-419', 'es-ES', 'de-DE', 'fr-FR', 'fr-CA', 'pt-BR', 'it-IT'];
-  const ref = GFX_STRINGS['en-US'];
-  const keysOf = (o, pre = '') => Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' ? keysOf(v, pre + k + '.') : [pre + k]));
-  const refKeys = keysOf(ref).sort();
-  for (const loc of need) {
-    ok(GFX_STRINGS[loc], 'missing locale ' + loc);
-    eq(keysOf(GFX_STRINGS[loc]).sort(), refKeys, loc + ' keys');
-    for (const cat of Object.keys(CATEGORIES)) ok(GFX_STRINGS[loc].cat[cat], `${loc} cat.${cat}`);
-    for (const tiers of Object.values(CATEGORIES)) for (const t of tiers) ok(GFX_STRINGS[loc].tier[t], `${loc} tier.${t}`);
-  }
-  eq([pickLocale('de'), pickLocale('fr-CA'), pickLocale('es-MX'), pickLocale('es-ES'), pickLocale('en-AU'), pickLocale('ja-JP')],
-    ['de-DE', 'fr-CA', 'es-419', 'es-ES', 'en-GB', 'en-US']);
-  eq(gfxStrings('pt-BR').title, 'Gráficos');
 });
 
 // Golden values are filled by tests/record-golden.mjs and must only change

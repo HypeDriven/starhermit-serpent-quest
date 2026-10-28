@@ -1,0 +1,92 @@
+# The menus on a desktop: Help, Settings (camera view, colour palette, captions), Profile (a guest name),
+# Leaderboards (the garden spirits' runs on this week's chase and today's Daily), Modes → Challenges →
+# a challenge's setup, a Journey stage paused by Escape and restarted, paused from the tray and left.
+# viewport 1280x800@1
+until 600 Leaderboards
+frames 30
+click =Help
+until 300 How to play
+frames 10
+expect Golden berries are worth far more
+save help
+click =← Back
+until 300 Leaderboards
+frames 10
+click =Settings
+until 300 Accessibility
+frames 10
+click =Angled garden view
+frames 10
+click =Top-down view
+frames 10
+click =Standard
+frames 10
+click =Tritanopia-safe
+frames 10
+click =Sound captions
+frames 10
+save settings
+click =← Back
+until 300 Leaderboards
+frames 10
+click =Guest Gardener
+until 300 Display name
+frames 10
+type {End}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}{Backspace}Fern
+frames 5
+click =Save
+until 300 Mastery 0 · Fern
+frames 10
+click =Leaderboards
+until 600 Weekly chase
+frames 10
+expect Bramble (spirit)
+save boards
+click =Daily
+frames 10
+click =Friends
+frames 10
+expect Casual board
+click =← Back
+until 300 Leaderboards
+frames 10
+click =Modes
+until 300 Choose a mode
+frames 10
+click =Challenge
+until 300 Counted Steps
+frames 10
+save challenges
+click =Tailwind
+until 300 Round rules
+frames 10
+expect Speed: very fast
+click =← Back
+until 300 Counted Steps
+frames 10
+click =← Back
+until 300 Choose a mode
+frames 10
+click =Journey
+until 300 First Slither
+frames 10
+click First Slither
+until 300 Round rules
+frames 10
+click =Start round
+until 600 =Go!
+frames 20
+key Escape 1
+until 300 =Resume
+frames 10
+save pause-top
+click =Restart round
+until 600 =Go!
+frames 5
+click =Pause
+until 300 =Resume
+frames 10
+click =Leave round
+until 300 Leaderboards
+frames 10
+expect Journey: 0 / 42 stages cleared

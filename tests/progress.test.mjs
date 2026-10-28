@@ -1,7 +1,10 @@
-// mergeProgression / mergeBoards: a cloud-save conflict keeps the best of both devices (node --test).
+// The save model (js/progress.js): a cloud-save conflict keeps the best of both devices, the browser
+// build's cloud slot migrates, and the game's options are validated (node --test).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeProgression, mergeBoards } from '../js/storage.js';
+import {
+  mergeProgression, mergeBoards, normalize, mergeSave, sameSave, readForeign, pickOptions, defaultSave, DEFAULT_OPTIONS,
+} from '../js/progress.js';
 
 test('progression merge keeps every clear, lesson, achievement and the larger counters', () => {
   const local = {
@@ -48,4 +51,46 @@ test('board merge keeps the better daily/challenge entry and the union of chase 
   assert.equal(m.daily.d2.score, 10);
   assert.deepEqual(m.chase.map((r) => r.score), [300, 250, 100]);
   assert.equal(m.challenges.c1.score, 50);
+});
+
+test('a save from anything is complete; ghosts are capped', () => {
+  const s = normalize(null);
+  assert.deepEqual(s, defaultSave());
+  const ghosts = {};
+  for (let i = 0; i < 30; i++) ghosts['ghost:' + i] = [];
+  const n = normalize({ progression: { masteryPoints: 'x', stages: [] }, boards: { chase: 'bad', ghosts }, name: 'x'.repeat(40), snapshot: 3 });
+  assert.equal(n.progression.masteryPoints, 0);
+  assert.deepEqual(n.progression.stages, {});
+  assert.deepEqual(n.boards.chase, []);
+  assert.equal(Object.keys(n.boards.ghosts).length, 16);
+  assert.ok(n.boards.ghosts['ghost:29']);
+  assert.equal(n.name.length, 24);
+  assert.equal(n.snapshot, null);
+});
+
+test('two devices merge: progress from both, this device keeps its paused round and name', () => {
+  const a = normalize({ progression: { stages: { j01: { won: true, bestScore: 300 } }, totalRounds: 3 }, snapshot: { mode: 'journey' }, name: 'Fern' });
+  const b = normalize({ progression: { stages: { j02: { won: true, bestScore: 90 } }, totalRounds: 7 }, name: 'Ivy' });
+  const m = mergeSave(b, a);
+  assert.ok(m.progression.stages.j01.won && m.progression.stages.j02.won);
+  assert.equal(m.progression.totalRounds, 7);
+  assert.deepEqual(m.snapshot, { mode: 'journey' });
+  assert.equal(m.name, 'Fern');
+  assert.ok(sameSave(m, mergeSave(b, m)));
+});
+
+test('the browser build\'s cloud slot ({ version, savedAt, progression, boards }) reads as a save', () => {
+  const text = JSON.stringify({ version: 1, savedAt: 5, progression: { masteryPoints: 12, stages: { j01: { won: true } } }, boards: { chase: [{ score: 40, sessionId: 's', when: 'w' }] } });
+  const s = readForeign(text);
+  assert.equal(s.progression.masteryPoints, 12);
+  assert.equal(s.boards.chase.length, 1);
+  assert.equal(readForeign('not json'), null);
+  assert.equal(readForeign(JSON.stringify({ other: 1 })), null);
+});
+
+test('options: only valid values pass', () => {
+  assert.deepEqual(pickOptions({ colorPalette: 'tritanopia', cameraView: 'top', haptics: false, captions: 'yes', leftHanded: true }),
+    { colorPalette: 'tritanopia', cameraView: 'top', haptics: false, leftHanded: true });
+  assert.deepEqual(pickOptions({ colorPalette: 'neon' }), {});
+  assert.equal(DEFAULT_OPTIONS.captions, true);
 });
