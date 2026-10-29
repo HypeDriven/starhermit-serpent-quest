@@ -15,10 +15,9 @@
 // density, sphere segments, particle pools, shadows, GTAO, bloom, the grade
 // and the anti-aliasing.
 //
-// From three.js r160 (physically based lights): colours as written, the
-// punctual lights' intensities ÷ π (the engine takes three's legacy units);
-// RoomEnvironment(renderer) as the old page made it, each material with the
-// environment as its own envMap at its old envMapIntensity (at minor 20 the
+// From three.js r160 (physically based lights): colours and intensities as
+// written; RoomEnvironment(renderer) as the old page made it, each material
+// with the environment as its own envMap at its old envMapIntensity (the
 // scene environment ignores per-material intensities). r160's composer drew
 // the scene in linear half floats, ran GTAO, bloomed it (0.35 / 0.35 /
 // threshold 0.92), graded it in linear light (GradeShader, before the
@@ -26,8 +25,8 @@
 // renderer.ao / bloom / grade / antialias do the same in that order. The
 // old canvas sat between the rails under the top bar: the camera keeps that
 // playfield's aspect and is offset into it (setViewOffset). The directional
-// shadow is fitted by the engine (to the view; the old page fitted the
-// light's frustum to the arena). Adaptive resolution, the pixel-ratio cap
+// shadow's ortho box is fitted to the arena in light space as the old page
+// did; bloom strength is squared for r185's UnrealBloomPass. Adaptive resolution, the pixel-ratio cap
 // and the frame-rate readout are the runtime's. Rendering never touches the
 // rules state.
 import {
@@ -36,7 +35,7 @@ import {
   InstancedMesh, Matrix3, Matrix4, Mesh, MeshBasicMaterial, MeshLambertMaterial, MeshPhysicalMaterial, MeshStandardMaterial,
   NoColorSpace, PerspectiveCamera, PlaneGeometry, PMREMGenerator, Points, PointsMaterial, Quaternion, Raycaster, RepeatWrapping,
   RingGeometry, RoomEnvironment, SphereGeometry, TextureLoader, TorusGeometry, Vector3, pointerToNdc, renderer, scene,
-  type Material, type MaterialHooks, type Object3D, type Texture,
+  SRGBColorSpace, type Material, type MaterialHooks, type Object3D, type OrthographicCamera, type Texture,
 } from "starhermit:scene";
 import type { Cell, Dir, GameEvent, RulesConfig, State, Theme } from "./game.ts";
 import { PARTICLE_SCALE, flowerCount, grassCount, type Look } from "./quality.ts";
@@ -131,7 +130,7 @@ let dotTex: Texture | null = null;
 function loadTex(path: string, color: boolean): Texture {
   const t = loader.load(path, undefined, undefined, (e: unknown) => console.warn(`texture ${path}: ${e instanceof Error ? e.message : String(e)}`));
   t.wrapS = t.wrapT = RepeatWrapping;
-  if (!color) t.colorSpace = NoColorSpace;
+  t.colorSpace = color ? SRGBColorSpace : NoColorSpace; // as render.js's canvasTexture(…, srgb)
   return t;
 }
 function detailTextures(size: number): DetailTex {
@@ -163,12 +162,12 @@ const camera = new PerspectiveCamera(CAMERA_FOV, 1, 0.1, 400);
 const shakeGroup = new Group();
 shakeGroup.add(camera);
 scene.add(shakeGroup);
-// r160 physical intensities ÷ π (the theme sets the sun's).
-const keyLight = new DirectionalLight(0xffffff, 2 / Math.PI);
+// r160 physical intensities as written (the theme sets the sun's).
+const keyLight = new DirectionalLight(0xffffff, 2);
 keyLight.shadow.bias = -0.0004;
-keyLight.shadow.normalBias = 1; // three's 0.02 world units; the engine's normal bias is in texels
+keyLight.shadow.normalBias = 0.02;
 scene.add(keyLight, keyLight.target);
-const hemiLight = new HemisphereLight(0xffffff, 0x334433, 0.8 / Math.PI);
+const hemiLight = new HemisphereLight(0xffffff, 0x334433, 0.8);
 scene.add(hemiLight);
 const raycaster = new Raycaster();
 const windU = { uTime: { value: 0 }, uAmp: { value: 0.12 } };
@@ -800,14 +799,35 @@ function applyThemeToLights(): void {
   scene.background = new Color(th.sky);
   scene.fog = new Fog(th.fog, cameraDistance() * 1.3, cameraDistance() * 3.4);
   keyLight.color.set(th.sun);
-  keyLight.intensity = th.sunIntensity / Math.PI;
+  keyLight.intensity = th.sunIntensity;
   hemiLight.color.set(th.sky);
   hemiLight.groundColor.set(th.groundDark);
   // Image-based lighting adds its own soft fill, so the hemisphere eases off.
-  hemiLight.intensity = (envMap() ? 0.65 : 0.75) / Math.PI;
+  hemiLight.intensity = envMap() ? 0.65 : 0.75;
   const m = Math.max(gridW, gridH);
   keyLight.position.set(m * 0.7, m * 1.15, m * 0.45);
   keyLight.target.position.set(0, 0, 0);
+  fitShadow();
+}
+/** render.js positionLights: the shadow frustum fitted tightly around the arena + hedge wall, in light space. */
+function fitShadow(): void {
+  const eye = keyLight.position;
+  const zAxis = new Vector3().copy(eye).sub(keyLight.target.position).normalize();
+  const xAxis = new Vector3(0, 1, 0).cross(zAxis).normalize();
+  const yAxis = new Vector3().copy(zAxis).cross(xAxis);
+  const hx = gridW / 2 + 1, hz = gridH / 2 + 1;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (const cx of [-hx, hx]) for (const cy of [0, 1.4]) for (const cz of [-hz, hz]) {
+    const d = new Vector3(cx, cy, cz).sub(eye);
+    const x = d.dot(xAxis), y = d.dot(yAxis), z = d.dot(zAxis);
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x);
+    y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+    z0 = Math.min(z0, z); z1 = Math.max(z1, z);
+  }
+  const cam = keyLight.shadow.camera as OrthographicCamera;
+  cam.left = x0; cam.right = x1; cam.bottom = y0; cam.top = y1;
+  cam.near = Math.max(0.1, -z1 - 1); cam.far = -z0 + 1;
+  cam.updateProjectionMatrix();
 }
 
 let aspect = 1;
@@ -1027,11 +1047,12 @@ export function applyLook(next: Look): void {
     denoise: { lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: next.ao === "high" ? 6 : 4, rings: 2, samples: next.ao === "high" ? 16 : 8, radiusExponent: 2 },
   };
   // UnrealBloomPass(0.35, 0.35, 0.92): only golden food, particles and bright glints bloom.
-  renderer.bloom = next.bloom ? { strength: 0.35, radius: 0.35, threshold: 0.92, resolution: next.budget.bloomRes } : null;
+  // r160 page: UnrealBloomPass 0.35 → 0.35² at minor 29 (r185 bloom).
+  renderer.bloom = next.bloom ? { strength: 0.35 * 0.35, radius: 0.35, threshold: 0.92, resolution: next.budget.bloomRes } : null;
   // GradeShader in linear light before the OutputPass: an 0.18 S-curve, saturation 1.1, cool shadows / warm highlights
   // by a smoothstep of luma from 0.15 to 0.8, a 0.2 vignette from 0.38 to 0.85 (y scaled 0.85).
   renderer.grade = next.grade ? {
-    space: "linear", contrast: 0.18, saturation: 1.1, split: [0.15, 0.8], shadows: [0.97, 0.99, 1.04], highlights: [1.04, 1.01, 0.95],
+    space: "linear", overRange: "keep", contrast: 0.18, saturation: 1.1, split: [0.15, 0.8], shadows: [0.97, 0.99, 1.04], highlights: [1.04, 1.01, 0.95],
     vignette: { amount: 0.2, inner: 0.38, outer: 0.85, scale: [1, 0.85] },
   } : null;
   renderer.antialias = next.antialias;
