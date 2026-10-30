@@ -192,8 +192,8 @@ suite and the browser e2e (both pass). Original defect numbers retained for trac
 
 ## Engine port — 2026-10-28
 
-The browser client (DOM + three.js r160) is replaced by a StarHermit engine script game (engine 1.28.0,
-minor 30); see spec.md §0. Rules, content and session timing decisions are unchanged (the session now
+The browser client (DOM + three.js r160) is replaced by a StarHermit engine script game (engine 1.29.0,
+minor 31); see spec.md §0. Rules, content and session timing decisions are unchanged (the session now
 takes its clock from the engine's fixed steps). Behaviour notes from the port:
 
 - The hint arrows now point toward the safe cells; the browser build drew "up" and "down" pointing back
