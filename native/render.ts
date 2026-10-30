@@ -1047,12 +1047,12 @@ export function applyLook(next: Look): void {
     denoise: { lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: next.ao === "high" ? 6 : 4, rings: 2, samples: next.ao === "high" ? 16 : 8, radiusExponent: 2 },
   };
   // UnrealBloomPass(0.35, 0.35, 0.92): only golden food, particles and bright glints bloom.
-  // r160 page: UnrealBloomPass 0.35 → 0.35² at minor 29 (r185 bloom).
-  renderer.bloom = next.bloom ? { strength: 0.35 * 0.35, radius: 0.35, threshold: 0.92, resolution: next.budget.bloomRes } : null;
-  // GradeShader in linear light before the OutputPass: an 0.18 S-curve, saturation 1.1, cool shadows / warm highlights
+  // r160 page: the engine's r160 bloom model at the page's strength (engine.minor 30).
+  renderer.bloom = next.bloom ? { model: "r160", strength: 0.35, radius: 0.35, threshold: 0.92, resolution: next.budget.bloomRes } : null;
+  // GradeShader in linear light before the OutputPass: an 0.18 smoothstep S-curve (contrastCurve "s"), saturation 1.1, cool shadows / warm highlights
   // by a smoothstep of luma from 0.15 to 0.8, a 0.2 vignette from 0.38 to 0.85 (y scaled 0.85).
   renderer.grade = next.grade ? {
-    space: "linear", overRange: "keep", contrast: 0.18, saturation: 1.1, split: [0.15, 0.8], shadows: [0.97, 0.99, 1.04], highlights: [1.04, 1.01, 0.95],
+    space: "linear", contrastCurve: "s", overRange: "keep", contrast: 0.18, saturation: 1.1, split: [0.15, 0.8], shadows: [0.97, 0.99, 1.04], highlights: [1.04, 1.01, 0.95],
     vignette: { amount: 0.2, inner: 0.38, outer: 0.85, scale: [1, 0.85] },
   } : null;
   renderer.antialias = next.antialias;
