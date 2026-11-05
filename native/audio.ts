@@ -6,18 +6,16 @@
 // and hat ticks above intensity 0.4) and each garden's ambience bed (birds,
 // crickets, night drone, wind, shore swells). The browser build synthesized
 // the music and the beds live with WebAudio nodes and a session-seeded
-// random stream; here each is rendered once from a fixed seed into a clip
-// (a slice a frame) and looped while a round plays: the music at the
+// random stream; here the engine's offline audio context renders each once
+// from a fixed seed into a clip, looped while a round plays: the music at the
 // round's intensity (Practice 0.3, every other mode 0.55), the bed of the
 // round's garden. The beds play on the music bus at their old level (the
 // runtime has no ambience bus). The runtime's Options own the volumes, mute
 // and the voice limit; UI clicks play on the "interface" bus, the rest on
 // "effects". The oscillator fallbacks the browser build played while a clip
-// decoded are not ported (a live synthesis graph makes clip loads fail on the
-// engine's web runtime), so a clip still loading is silent. Clips load once
-// the mixer runs (natively at once, in a browser after the first press), one
-// at a time.
-import { context, createClip, loadClip, play as playClip, type AudioClip, type Sound } from "starhermit:audio";
+// decoded are not ported, so a clip still loading is silent. Clips all load at
+// start.
+import { OfflineAudioContext, context, createClip, loadClip, play as playClip, type AudioClip, type GainNode, type Sound } from "starhermit:audio";
 
 const SAMPLE_FOR_EVENT: Record<string, string> = {
   turn: "turn-tick", eat: "eat-fruit", "eat-golden": "eat-golden-chime", grow: "grow-swell", "rival-defeated": "rival-defeated-hit",
@@ -32,9 +30,14 @@ export const CAPTIONS: Record<string, string> = {
   pause: "Soft swell — paused", achievement: "Badge chime — achievement unlocked",
 };
 const clips = new Map<string, AudioClip>();
-const queue: string[] = [...new Set(Object.values(SAMPLE_FOR_EVENT))];
-let loading = false;
 let suspended = false;
+
+/** Loads every clip at once (onStart). */
+export function loadSfx(): void {
+  for (const name of new Set(Object.values(SAMPLE_FOR_EVENT))) {
+    loadClip(`sfx/${name}.opus`).then((c) => { clips.set(name, c); }, (e: unknown) => console.warn(`sfx ${name}: ${String(e)}`));
+  }
+}
 
 /** audio.js play(name): the event's clip, once loaded. */
 export function play(name: string): void {
@@ -44,7 +47,7 @@ export function play(name: string): void {
   const clip = clips.get(file);
   if (!clip) return;
   try { playClip(clip, { bus: name === "ui-click" || name === "ui-back" ? "interface" : "effects" }); }
-  catch { clips.delete(file); if (!queue.includes(file)) queue.push(file); } // a clip the mixer lost: load it again
+  catch { /* the mixer is full this frame: skip it */ }
 }
 
 /** A hidden window or the pause card: the loops fade out (audio.js setDucked). */
@@ -69,80 +72,85 @@ interface Voice {
   osc?: "sine" | "triangle" | "square" | "sawtooth"; freq: number; endFreq?: number;
   filter?: "lowpass" | "highpass" | "bandpass";
 }
-/** audio.js envelope: exponential from 0.0001 to vol over attack, then exponential to 0.0001 at dur. */
-function env(t: number, v: Voice): number {
-  if (t < 0 || t > v.dur) return 0;
-  if (t < v.attack) return 0.0001 * Math.pow(v.vol / 0.0001, t / v.attack);
-  return v.vol * Math.pow(0.0001 / v.vol, (t - v.attack) / Math.max(1e-4, v.dur - v.attack));
-}
-/** A loop being rendered voice by voice, a slice a frame (the loop wraps: a long voice near the end rings into the start). */
-class Loop {
-  readonly buf: Float32Array;
-  private i = 0;
-  private done = false;
-  private bedAt = 0;
-  private k = 0;
-  private ph = 0;
-  private lp = 0;
-  private lp2 = 0;
-  private rnd: () => number = Math.random;
-  constructor(seconds: number, private readonly voices: Voice[], private readonly bed: ((i: number) => number) | null, private readonly gain: number) {
-    this.buf = new Float32Array(Math.round(seconds * RATE));
-  }
-  /** Renders up to `work` samples; true when finished. */
-  step(work: number): boolean {
-    if (this.done) return true;
-    const n = this.buf.length;
-    if (this.bed && this.bedAt < n) {
-      const end = Math.min(n, this.bedAt + work);
-      for (let k = this.bedAt; k < end; k++) this.buf[k]! += this.bed(k) * this.gain;
-      this.bedAt = end;
-      return false;
-    }
-    while (work > 0 && this.i < this.voices.length) {
-      const v = this.voices[this.i]!;
-      const len = Math.round(v.dur * RATE);
-      if (this.k === 0) { this.rnd = mulberry32(this.i * 7919 + 17); this.ph = 0; this.lp = 0; this.lp2 = 0; }
-      const start = Math.round(v.t0 * RATE);
-      const end = Math.min(len, this.k + work);
-      work -= end - this.k;
-      for (let k = this.k; k < end; k++) {
-        const t = k / RATE;
-        const f = v.endFreq ? v.freq * Math.pow(v.endFreq / v.freq, t / v.dur) : v.freq;
-        let s: number;
-        if (v.osc) {
-          this.ph = (this.ph + f / RATE) % 1;
-          const ph = this.ph;
-          s = v.osc === "sine" ? Math.sin(2 * Math.PI * ph) : v.osc === "triangle" ? (ph < 0.5 ? 4 * ph - 1 : 3 - 4 * ph)
-            : v.osc === "square" ? (ph < 0.5 ? 1 : -1) : 2 * ph - 1;
-        } else {
-          const w = this.rnd() * 2 - 1;
-          const a = 1 - Math.exp((-2 * Math.PI * Math.min(f, RATE * 0.45)) / RATE);
-          this.lp += (w - this.lp) * a;
-          if (v.filter === "highpass") s = w - this.lp;
-          else if (v.filter === "bandpass") { this.lp2 += (this.lp - this.lp2) * a; s = (this.lp - this.lp2) * 2; }
-          else s = this.lp;
-        }
-        this.buf[(start + k) % n]! += s * env(t, v) * this.gain;
-      }
-      this.k = end;
-      if (this.k >= len) { this.i++; this.k = 0; }
-    }
-    if (this.i >= this.voices.length) this.done = true;
-    return this.done;
+type Off = OfflineAudioContext;
+const Q_DB = 0; // Q 1, in dB as the engine's filters read it
+/** One voice into `out`, with audio.js's envelope (exponential from 0.0001 to vol over attack, then to 0.0001 at dur). */
+function scheduleVoice(off: Off, out: GainNode, v: Voice, index: number, lead: number): void {
+  const t = lead + v.t0, end = t + v.dur;
+  const g = off.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(v.vol, t + v.attack);
+  g.gain.exponentialRampToValueAtTime(0.0001, end);
+  g.connect(out);
+  if (v.osc) {
+    const osc = off.createOscillator();
+    osc.type = v.osc;
+    osc.frequency.setValueAtTime(v.freq, t);
+    if (v.endFreq) osc.frequency.exponentialRampToValueAtTime(v.endFreq, end);
+    osc.connect(g);
+    osc.start(t);
+    osc.stop(end);
+  } else {
+    const noise = off.createNoise({ seed: index * 7919 + 17, seconds: 1 });
+    const f = off.createBiquadFilter();
+    f.type = v.filter ?? "lowpass";
+    f.frequency.setValueAtTime(Math.min(v.freq, RATE * 0.45), t);
+    if (v.endFreq) f.frequency.exponentialRampToValueAtTime(v.endFreq, end);
+    f.Q.value = Q_DB;
+    noise.connect(f).connect(g);
+    noise.start(t);
+    noise.stop(end);
   }
 }
-/** A continuous low-passed noise bed whose level and cutoff follow `shape` (seamless: the filter warms up a second first). */
-function noiseBed(seconds: number, seed: number, shape: (t: number) => { freq: number; vol: number }): (i: number) => number {
-  const rnd = mulberry32(seed);
-  const n = Math.round(seconds * RATE);
-  let lp = 0;
-  for (let k = 0; k < RATE; k++) { const sh = shape(((n - RATE + k) % n) / RATE); lp += (rnd() * 2 - 1 - lp) * (1 - Math.exp((-2 * Math.PI * sh.freq) / RATE)); }
-  return (i) => {
-    const sh = shape(i / RATE);
-    lp += (rnd() * 2 - 1 - lp) * (1 - Math.exp((-2 * Math.PI * sh.freq) / RATE));
-    return lp * sh.vol * 3; // a one-pole low-pass keeps about a third of the noise's level
-  };
+/** A low-passed noise bed whose level and cutoff follow `shape` (automated every 0.1 s; seamless once settled). */
+type Shape = (t: number) => { freq: number; vol: number };
+function scheduleBed(off: Off, out: GainNode, seconds: number, seed: number, lead: number, shape: Shape): void {
+  const noise = off.createNoise({ seed, seconds });
+  const lp = off.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.Q.value = Q_DB;
+  const g = off.createGain();
+  const at = (t: number): number => (t - lead + 2 * seconds) % seconds;
+  lp.frequency.setValueAtTime(shape(at(0)).freq, 0);
+  g.gain.setValueAtTime(shape(at(0)).vol * BED_LEVEL, 0);
+  for (let t = 0.1; t < lead + seconds + 0.5; t += 0.1) {
+    const sh = shape(at(t));
+    lp.frequency.linearRampToValueAtTime(sh.freq, t);
+    g.gain.linearRampToValueAtTime(sh.vol * BED_LEVEL, t);
+  }
+  noise.connect(lp).connect(g).connect(out);
+  noise.start();
+}
+/** The bed's make-up gain, as the old one (a low-pass keeps about a third of the noise's level). */
+const BED_LEVEL = 3;
+/** The render past `lead`, `seconds` long, with what ran past the end wrapped to the start (a long voice rings into the start). */
+async function renderLoop(seconds: number, gain: number, lead: number, build: (off: Off, out: GainNode) => void): Promise<AudioClip> {
+  const length = Math.round(seconds * RATE), start = Math.round(lead * RATE);
+  const off = new OfflineAudioContext(1, start + length + Math.round(4 * RATE), RATE);
+  const out = off.createGain();
+  out.gain.value = gain;
+  out.connect(off.destination);
+  build(off, out);
+  const r = (await off.startRendering()).getChannelData(0);
+  const data = r.slice(start, start + length);
+  return createClip([data], RATE);
+}
+interface Loop { seconds: number; voices: Voice[]; beds: { seed: number; shape: Shape }[]; drones: [number, number][]; gain: number }
+function renderOf(l: Loop): Promise<AudioClip> {
+  const lead = 4; // the bed settles, and the tail of the loop's voices rings into its start from the copy before it
+  return renderLoop(l.seconds, l.gain, lead, (off, out) => {
+    for (const b of l.beds) scheduleBed(off, out, l.seconds, b.seed, lead, b.shape);
+    for (const [hz, level] of l.drones) {
+      const o = off.createOscillator(); o.frequency.value = hz;
+      const g = off.createGain(); g.gain.value = level;
+      o.connect(g).connect(out);
+      o.start();
+    }
+    l.voices.forEach((v, i) => {
+      scheduleVoice(off, out, v, i, lead);
+      if (v.t0 + v.dur > l.seconds) scheduleVoice(off, out, { ...v, t0: v.t0 - l.seconds }, i, lead); // the wrap
+    });
+  });
 }
 
 // audio.js startMusic: 64 steps of 0.22 s (spb at intensity ≤ 0.7); MELODY, BASS_LINE, SCALE as authored.
@@ -168,7 +176,7 @@ function musicLoop(intensity: number): Loop {
     if (perc > 0 && step % 4 === 0) voices.push({ t0: t, dur: 0.08, vol: 0.5 * perc, attack: 0.003, filter: "lowpass", freq: 150, endFreq: 50 });
     if (perc > 0 && step % 2 === 1) voices.push({ t0: t, dur: 0.03, vol: 0.25 * perc, attack: 0.002, filter: "highpass", freq: 6000 });
   }
-  return new Loop(64 * spb, voices, null, 0.5); // the music bus at 0.5
+  return { seconds: 64 * spb, voices, beds: [], drones: [], gain: 0.5 }; // the music bus at 0.5
 }
 
 /** audio.js startAmbience(kind): the garden's bed, a fixed-seed loop (the old one rolled its chirps live). */
@@ -180,40 +188,41 @@ function ambienceLoop(kind: string): Loop {
     v.push({ t0, dur, vol, attack: 0.01, osc: "sine", freq: f, endFreq: f * (0.8 + r() * 0.5) });
   };
   let seconds = 14;
-  let bed: (i: number) => number;
+  let bed: { seed: number; shape: Shape } | null = null;
+  const drones: [number, number][] = [];
   if (kind === "birds") {
     seconds = 1.8 * 8;
-    bed = noiseBed(seconds, 1, () => ({ freq: 600, vol: 0.02 }));
+    bed = { seed: 1, shape: () => ({ freq: 600, vol: 0.02 }) };
     for (let t = 1.8; t < seconds; t += 1.8) {
       if (r() < 0.6) { const n = 1 + Math.floor(r() * 3); let at = t; for (let i = 0; i < n; i++) { chirp(at, 2000, 4500, 0.08 + r() * 0.08, 0.025); at += 0.09 + r() * 0.08; } }
     }
   } else if (kind === "crickets") {
     seconds = 0.7 * 20;
-    bed = noiseBed(seconds, 2, () => ({ freq: 500, vol: 0.012 }));
+    bed = { seed: 2, shape: () => ({ freq: 500, vol: 0.012 }) };
     for (let t = 0.7; t < seconds; t += 0.7) if (r() < 0.75) for (let i = 0; i < 3; i++) v.push({ t0: t + i * 0.07, dur: 0.04, vol: 0.02, attack: 0.005, osc: "sine", freq: 4200 + r() * 300 });
   } else if (kind === "night") {
     seconds = 2.5 * 6;
-    const b = noiseBed(seconds, 3, () => ({ freq: 300, vol: 0.01 }));
+    bed = { seed: 3, shape: () => ({ freq: 300, vol: 0.01 }) };
     // the two sine drones (110 and 165 Hz, whole cycles in the loop)
-    bed = (i) => b(i) + Math.sin((2 * Math.PI * 110 * i) / RATE) * 0.02 + Math.sin((2 * Math.PI * 165 * i) / RATE) * 0.014;
+    drones.push([110, 0.02], [165, 0.014]);
     for (let t = 2.5; t < seconds; t += 2.5) if (r() < 0.35) chirp(t, 3000, 5000, 0.1, 0.015);
   } else if (kind === "wind") {
     seconds = 2.2 * 6;
     // every 2.2 s a new cutoff (250–750 Hz) and level (0.02–0.045), approached smoothly
     const targets = Array.from({ length: 6 }, () => ({ freq: 250 + r() * 500, vol: 0.02 + r() * 0.025 }));
-    bed = noiseBed(seconds, 4, (t) => {
+    bed = { seed: 4, shape: (t) => {
       const k = Math.floor(t / 2.2) % 6, u = (t % 2.2) / 2.2, a = targets[(k + 5) % 6]!, b = targets[k]!;
       const e = 1 - Math.exp(-u * 1.6);
       return { freq: a.freq + (b.freq - a.freq) * e, vol: a.vol + (b.vol - a.vol) * e };
-    });
+    } };
   } else {
     // shore: a slow swell (0.015 → 0.055 over 3 s → 0.015 at 7 s), twice
-    bed = noiseBed(seconds, 5, (t) => { const u = t % 7; return { freq: 500, vol: u < 3 ? 0.015 + (0.04 * u) / 3 : 0.055 - (0.04 * (u - 3)) / 4 }; });
+    bed = { seed: 5, shape: (t) => { const u = t % 7; return { freq: 500, vol: u < 3 ? 0.015 + (0.04 * u) / 3 : 0.055 - (0.04 * (u - 3)) / 4 }; } };
   }
-  return new Loop(seconds, v, bed, 0.5); // the ambience bus at 0.5
+  return { seconds, voices: v, beds: bed ? [bed] : [], drones, gain: 0.5 }; // the ambience bus at 0.5
 }
 
-interface LoopSlot { loop: Loop; clip: AudioClip | null; voice: Sound | null }
+interface LoopSlot { clip: AudioClip | null; voice: Sound | null }
 const music = new Map<number, LoopSlot>();
 const beds = new Map<string, LoopSlot>();
 let want: { intensity: number; ambience: string } | null = null;
@@ -228,29 +237,19 @@ export function setRound(next: { intensity: number; ambience: string } | null): 
 }
 function slotFor<K>(map: Map<K, LoopSlot>, key: K, make: () => Loop): LoopSlot {
   let s = map.get(key);
-  if (!s) { s = { loop: make(), clip: null, voice: null }; map.set(key, s); }
+  if (!s) {
+    const slot: LoopSlot = { clip: null, voice: null };
+    renderOf(make()).then((c) => { slot.clip = c; }, (e: unknown) => console.warn(`audio: ${String(e)}`));
+    s = slot;
+    map.set(key, s);
+  }
   return s;
 }
 
-/** Each frame: the clips once the mixer runs (one at a time), the loops the round wants, then their levels. */
+/** Each frame once the mixer runs: the loops the round wants, then their levels. */
 export function update(): void {
-  if (context.state !== "running") return;
-  if (!loading && queue.length) {
-    const name = queue.shift()!;
-    if (!clips.has(name)) {
-      loading = true;
-      loadClip(`sfx/${name}.opus`).then((c) => { clips.set(name, c); loading = false; }, (e: unknown) => { console.warn(`sfx ${name}: ${String(e)}`); loading = false; });
-    }
-    return;
-  }
-  if (loading || !want) return;
+  if (context.state !== "running" || !want) return;
   const slots = [slotFor(music, want.intensity, () => musicLoop(want!.intensity)), slotFor(beds, want.ambience, () => ambienceLoop(want!.ambience))];
-  for (const s of slots) {
-    if (s.clip) continue;
-    if (!s.loop.step(4000)) return;
-    try { s.clip = createClip([s.loop.buf], RATE); } catch (e) { console.warn(`audio: ${String(e)}`); }
-    return;
-  }
   for (const s of slots) {
     if (!s.voice && !suspended && s.clip) {
       try { s.voice = playClip(s.clip, { bus: "music", loop: true, gain: 0 }); } catch { s.voice = null; }

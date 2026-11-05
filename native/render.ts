@@ -33,7 +33,7 @@ import {
   ACESFilmicToneMapping, AdditiveBlending, BoxGeometry, BufferAttribute, BufferGeometry, CircleGeometry, Color, ConeGeometry,
   CylinderGeometry, DirectionalLight, DoubleSide, Euler, Float32BufferAttribute, Fog, Group, HemisphereLight, IcosahedronGeometry,
   InstancedMesh, Matrix3, Matrix4, Mesh, MeshBasicMaterial, MeshLambertMaterial, MeshPhysicalMaterial, MeshStandardMaterial,
-  NoColorSpace, PerspectiveCamera, PlaneGeometry, PMREMGenerator, Points, PointsMaterial, Quaternion, Raycaster, RepeatWrapping,
+  NoColorSpace, PerspectiveCamera, PlaneGeometry, PMREMGenerator, ParticleEmitter, Points, PointsMaterial, Quaternion, Raycaster, RepeatWrapping,
   RingGeometry, RoomEnvironment, SphereGeometry, TextureLoader, TorusGeometry, Vector3, pointerToNdc, renderer, scene,
   SRGBColorSpace, type Material, type MaterialHooks, type Object3D, type OrthographicCamera, type Texture,
 } from "starhermit:scene";
@@ -214,68 +214,32 @@ function surface(p: Params, physical = false): Material {
 }
 
 // ---------------------------------------------------------------- particles and pollen
+/** The bursts: one emitter per colour (an emitter's colour is read for its live particles too), made as bursts ask. */
 class ParticlePool {
-  readonly points: Points;
-  private readonly pos: Float32Array; private readonly col: Float32Array; private readonly base: Float32Array;
-  private readonly vel: Float32Array; private readonly life: Float32Array; private readonly maxLife: Float32Array;
-  private cursor = 0;
-  private active = false;
-  private readonly share: number;
-  private readonly rand = mulberry32(0x5eed);
   readonly material: PointsMaterial;
-  constructor(parent: Object3D, readonly max: number, detailed: boolean) {
+  private readonly emitters = new Map<number, ParticleEmitter>();
+  private readonly share: number;
+  constructor(private readonly parent: Object3D, readonly max: number, detailed: boolean) {
     this.share = max / MAX_PARTICLES;
-    this.pos = new Float32Array(max * 3); this.col = new Float32Array(max * 3); this.base = new Float32Array(max * 3);
-    this.vel = new Float32Array(max * 3); this.life = new Float32Array(max); this.maxLife = new Float32Array(max);
-    for (let i = 0; i < max; i++) this.pos[i * 3 + 1] = -1000;
-    const geom = new BufferGeometry();
-    geom.setAttribute("position", new BufferAttribute(this.pos, 3));
-    geom.setAttribute("color", new BufferAttribute(this.col, 3));
     this.material = new PointsMaterial({
-      size: detailed ? 0.22 : 0.14, vertexColors: true, transparent: true, depthWrite: false, blending: AdditiveBlending,
+      size: detailed ? 0.22 : 0.14, transparent: true, depthWrite: false, blending: AdditiveBlending,
       sizeAttenuation: true, map: detailed ? dot() : null,
     });
-    this.points = new Points(geom, this.material);
-    this.points.frustumCulled = false;
-    parent.add(this.points);
   }
   /** tier 0 small (eat), 1 medium (grow / rival), 2 large (win / death). */
   burst(x: number, y: number, z: number, hex: number, tier: 0 | 1 | 2, countScale: number): void {
     const n = Math.round([12, 30, 90][tier]! * countScale * this.share);
-    const c = new Color(hex);
     const speed = [1.6, 2.6, 4.2][tier]!, up = [2.2, 3.2, 5.0][tier]!, lifeBase = [0.45, 0.6, 0.9][tier]!;
-    const r = this.rand;
-    for (let i = 0; i < n; i++) {
-      const idx = this.cursor;
-      this.cursor = (this.cursor + 1) % this.max;
-      const a = r() * Math.PI * 2, m = (0.3 + r() * 0.7) * speed;
-      this.pos[idx * 3] = x; this.pos[idx * 3 + 1] = y + 0.15; this.pos[idx * 3 + 2] = z;
-      this.vel[idx * 3] = Math.cos(a) * m; this.vel[idx * 3 + 1] = up * (0.4 + r() * 0.8); this.vel[idx * 3 + 2] = Math.sin(a) * m;
-      const shade = 0.7 + r() * 0.5;
-      this.base[idx * 3] = c.r * shade; this.base[idx * 3 + 1] = c.g * shade; this.base[idx * 3 + 2] = c.b * shade;
-      this.maxLife[idx] = this.life[idx] = lifeBase * (0.6 + r() * 0.7);
+    let e = this.emitters.get(hex);
+    if (!e) {
+      e = new ParticleEmitter({ capacity: this.max, material: this.material, seed: (0x5eed + hex) >>> 0, space: "local", color: hex, gravity: [0, -7.5, 0], opacity: [1, 0] });
+      e.frustumCulled = false;
+      this.parent.add(e);
+      this.emitters.set(hex, e);
     }
-    this.active = true;
+    e.set({ life: [lifeBase * 0.6, lifeBase * 1.3], velocity: [0, up * 0.8, 0], velocitySpread: [speed * 0.65, up * 0.4, speed * 0.65] }).burst(n, [x, y + 0.15, z]);
   }
-  update(dt: number): void {
-    if (!this.active) return;
-    let any = false;
-    for (let i = 0; i < this.max; i++) {
-      if (this.life[i]! <= 0) continue;
-      any = true;
-      this.life[i]! -= dt;
-      const i3 = i * 3;
-      if (this.life[i]! <= 0) { this.pos[i3 + 1] = -1000; this.col[i3] = this.col[i3 + 1] = this.col[i3 + 2] = 0; continue; }
-      this.vel[i3 + 1]! -= 7.5 * dt;
-      this.pos[i3]! += this.vel[i3]! * dt; this.pos[i3 + 1]! += this.vel[i3 + 1]! * dt; this.pos[i3 + 2]! += this.vel[i3 + 2]! * dt;
-      if (this.pos[i3 + 1]! < 0.02) { this.pos[i3 + 1] = 0.02; this.vel[i3 + 1]! *= -0.3; }
-      const f = this.life[i]! / this.maxLife[i]!;
-      this.col[i3] = this.base[i3]! * f; this.col[i3 + 1] = this.base[i3 + 1]! * f; this.col[i3 + 2] = this.base[i3 + 2]! * f;
-    }
-    this.active = any;
-    (this.points.geometry.getAttribute("position") as BufferAttribute).needsUpdate = true;
-    (this.points.geometry.getAttribute("color") as BufferAttribute).needsUpdate = true;
-  }
+  dispose(): void { for (const e of this.emitters.values()) e.dispose(); this.emitters.clear(); this.material.dispose(); }
 }
 class PollenField {
   readonly points: Points;
@@ -879,7 +843,7 @@ function buildScene(): void {
   buildFoodPool();
   buildMarkers();
   particles = new ParticlePool(world, look!.budget.particles, look!.detailed);
-  own(particles.material);
+  own(particles);
   pollen = look!.particles === "high" ? new PollenField(world, gridW, gridH, theme!.foodGolden, look!.budget.pollen) : null;
   if (pollen) own(pollen.material);
   keyLight.castShadow = look!.shadows > 0;
@@ -1041,14 +1005,14 @@ export function applyLook(next: Look): void {
   keyLight.castShadow = next.shadows > 0;
   if (next.shadows > 0) keyLight.shadow.mapSize = next.shadows;
   // GTAOPass: radius 0.45, distance exponent 1.5, thickness 1, blend 0.8 / 0.65, 16 / 8 samples and the denoise per tier.
-  renderer.ao = next.ao === "off" ? null : {
-    blendIntensity: next.ao === "high" ? 0.8 : 0.65, radius: 0.45, distanceExponent: 1.5, thickness: 1, scale: 1,
-    samples: next.ao === "high" ? 16 : 8, resolution: next.budget.aoRes,
-    denoise: { lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: next.ao === "high" ? 6 : 4, rings: 2, samples: next.ao === "high" ? 16 : 8, radiusExponent: 2 },
+  renderer.ao = !next.ao ? null : {
+    blendIntensity: next.ao.resolution >= 1 ? 0.8 : 0.65, radius: 0.45, distanceExponent: 1.5, thickness: 1, scale: 1,
+    samples: next.ao.samples, resolution: next.ao.resolution,
+    denoise: { lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: next.ao.resolution >= 1 ? 6 : 4, rings: 2, samples: next.ao.denoiseSamples, radiusExponent: 2 },
   };
   // UnrealBloomPass(0.35, 0.35, 0.92): only golden food, particles and bright glints bloom.
   // r160 page: the engine's r160 bloom model at the page's strength (engine.minor 30).
-  renderer.bloom = next.bloom ? { model: "r160", strength: 0.35, radius: 0.35, threshold: 0.92, resolution: next.budget.bloomRes } : null;
+  renderer.bloom = next.bloom !== null ? { model: "r160", strength: 0.35, radius: 0.35, threshold: 0.92, resolution: next.bloom } : null;
   // GradeShader in linear light before the OutputPass: an 0.18 smoothstep S-curve (contrastCurve "s"), saturation 1.1, cool shadows / warm highlights
   // by a smoothstep of luma from 0.15 to 0.8, a 0.2 vignette from 0.38 to 0.85 (y scaled 0.85).
   renderer.grade = next.grade ? {
@@ -1152,7 +1116,6 @@ export function update(dt: number, W: number, H: number, rect: Rect): void {
     const pulse = 0.45 + Math.sin(simTime * 4) * 0.15;
     for (const d of hintDirs) (hintArrows[d].material as MeshBasicMaterial).opacity = pulse;
   }
-  particles?.update(dt);
   if (pollen) {
     pollen.points.visible = !reducedMotion;
     if (!reducedMotion) pollen.update(simTime);

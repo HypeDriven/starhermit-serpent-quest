@@ -19,7 +19,7 @@
 // attract garden, replays and the short delays (results, hints, toasts,
 // captions) run on the same clock, so a hidden window and slow frames never
 // move them and play scripts replay exactly.
-import { clipboard, frame, onFixedUpdate, onPreferencesChange, onRender, onResume, onStart, onSuspend, onUpdate, preferences, setFixedRate } from "starhermit:engine";
+import { clipboard, frame, levelSettings, onFixedUpdate, onPreferencesChange, onRender, onResume, onStart, onSuspend, onUpdate, preferences, setFixedRate } from "starhermit:engine";
 import { onAction, onPointerButton, onPointerMove, onTouch, vibrate } from "starhermit:input";
 import * as ui from "starhermit:ui";
 import { onSessionEnded, requestSignIn } from "starhermit:platform";
@@ -117,6 +117,8 @@ export function announce(text: string, assertive = false): void {
   pendingAnnounce = { text: text.slice(0, 500), assertive };
 }
 export function toast(text: string, kind = ""): void {
+  // over menus the engine's toasts do; the round's line sits over the playfield
+  if (app.screen || !session) { ui.toast!(text, { duration: 2.6, style: ["toast-box", kind === "warn" ? "toast-warn-text" : "toast-text"], dismissible: false }); return; }
   app.toast = { text, warn: kind === "warn", until: clockMs + 2600 };
   if (kind === "warn") announce(text, true);
 }
@@ -692,7 +694,7 @@ export function signIn(): void { void requestSignIn().catch(() => undefined); }
 export function copyInvite(): void {
   const link = platform.inviteLink();
   if (!link) return;
-  try { clipboard.writeText(link); toast(S("inviteCopied")); } catch { toast(S("inviteLink", { url: link })); }
+  try { clipboard.writeText(link); toast(S("inviteCopied")); } catch { toast(S("inviteLink", { link: link })); }
 }
 export function saveGuestName(name: string): void {
   if (platform.signedIn()) return;
@@ -890,10 +892,10 @@ function driveReplay(): void {
 let lookKey = "";
 function applyLook(): void {
   const f = frame();
-  const k = `${f.quality}:${f.levelIndex}`;
+  const k = f.level;
   if (k === lookKey) return;
   lookKey = k;
-  render.applyLook(lookFor(f.quality, f.levelIndex));
+  render.applyLook(lookFor(levelSettings(f.level)));
 }
 function applyOptions(): void {
   render.setPalette(platform.options.colorPalette);
@@ -901,6 +903,7 @@ function applyOptions(): void {
 }
 
 onStart(() => {
+  audio.loadSfx();
   setFixedRate(60);
   initStyles();
   platform.initPlatform();

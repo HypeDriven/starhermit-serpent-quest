@@ -1,0 +1,67 @@
+# Tier bench: Practice (steady) played by keys, from practice-landscape.play.
+until 600 Leaderboards
+frames 30
+click =Modes
+until 300 Choose a mode
+frames 10
+click =Practice
+until 300 Undo available
+frames 10
+click =Start round
+until 600 =Go!
+frames 3
+key ArrowRight 1
+frames 2
+key KeyH 1
+frames 18
+key ArrowDown 1
+frames 30
+key ArrowLeft 1
+frames 39
+key ArrowDown 1
+frames 14
+key ArrowLeft 1
+frames 38
+measure start
+key ArrowUp 1
+frames 15
+key ArrowLeft 1
+frames 6
+key ArrowUp 1
+frames 22
+key ArrowRight 1
+frames 95
+key ArrowUp 1
+frames 14
+key ArrowLeft 1
+frames 79
+key ArrowDown 1
+frames 31
+key ArrowLeft 1
+frames 6
+key ArrowDown 1
+frames 22
+key ArrowRight 1
+frames 63
+key ArrowUp 1
+frames 30
+key ArrowRight 1
+frames 39
+key ArrowDown 1
+frames 14
+key ArrowRight 1
+frames 6
+key ArrowUp 1
+frames 23
+key ArrowLeft 1
+frames 54
+key ArrowUp 1
+frames 23
+key ArrowRight 1
+frames 46
+key ArrowUp 1
+frames 39
+key ArrowLeft 1
+frames 46
+key ArrowUp 1
+measure stop
