@@ -1,3 +1,6 @@
+import { localizedStyle as __l10nStyle } from "./l10n/font.ts";
+// localization-runtime:attached
+import { openLocalizedOptions as __l10nOptions } from "./l10n/menu.ts";
 // The browser build's DOM shell (index.html + js/ui.js) as starhermit:ui,
 // built every frame over the arena: the top bar (profile chip, the Daily
 // chip with the time to the next garden, Help and Settings), the Objective
@@ -13,7 +16,22 @@
 // the Daily chip on its own row of the bar) and short landscape (≤ 500 px
 // tall: a slimmer bar, 48 px tray buttons, the pause card in two columns).
 // The arena is fitted into the playfield they leave (main.ts stage).
-import { frame, openMenu } from "starhermit:engine";
+// The browser build's DOM shell (index.html + js/ui.js) as starhermit:ui,
+// built every frame over the arena: the top bar (profile chip, the Daily
+// chip with the time to the next garden, Help and Settings), the Objective
+// and Score / Status rails (drawers behind 🎯 / 📊 on compact layouts), the
+// HUD (mode, goals, moves and time left, score), the countdown, the toast
+// and the sound captions, the action tray (steering pad; Hint, Undo, Pause —
+// mirrored for left-handed play), the pause card, the accessible board
+// mirror (a named target over the playfield), and every full-page screen
+// over the garden (title, modes, journey, learn, challenges, setup, results,
+// help, settings, progression, profile, leaderboards). The old media queries
+// are layouts picked by the window's logical size: wide (≥ 1024 px: both
+// rails), compact (< 1024: the drawers), portrait phones (≤ 700 px wide:
+// the Daily chip on its own row of the bar) and short landscape (≤ 500 px
+// tall: a slimmer bar, 48 px tray buttons, the pause card in two columns).
+// The arena is fitted into the playfield they leave (main.ts stage).
+import { frame } from "starhermit:engine";
 import { bindings, primaryPointer, requestRebind } from "starhermit:input";
 import * as audio from "./audio.ts";
 import * as draw from "starhermit:draw";
@@ -44,7 +62,7 @@ function textWidth(text: string, style: string, kind?: "button" | "heading"): nu
 /** Text up to `width` wide: one label when it fits, else a paragraph. */
 function para(text: string, width: number, cls = "text", id?: string, size?: number): void {
   if (!text) return;
-  let u = size ? ui.style(cls, { text: { size } }) : ui.style(cls);
+  let u = size ? ui.style(__l10nStyle(cls), __l10nStyle({ text: { size } })) : ui.style(__l10nStyle(cls));
   if (id) u = u.id(id);
   if (ui.measureText(text, { style: [cls], ...(size ? { size } : {}) }).width / ui.preferences().scale <= width) u.label(text);
   else u.paragraph(text, Math.max(20, width));
@@ -60,7 +78,7 @@ function button(b: Btn): void {
   const s: ui.Style = {};
   if (b.width != null) s.width = b.width;
   if (b.height != null) s.height = b.height;
-  if (ui.style(style, s).id(b.id).button(b.name ?? b.text, opts) && fresh()) later(() => { if (b.click !== false) clickSound(style); b.act(); });
+  if (ui.style(__l10nStyle(style), __l10nStyle(s)).id(b.id).button(b.name ?? b.text, opts) && fresh()) later(() => { if (b.click !== false) clickSound(style); b.act(); });
 }
 /** ui.js: buttons click (Back plays its own sound; the steering pad its turn tick). */
 function clickSound(style: string): void { void style; audio.play("ui-click"); }
@@ -82,7 +100,7 @@ function toWindow(x: number, y: number, w: number, h: number): ui.Rect {
   return { x: sa.left + x * sc, y: sa.top + y * sc, width: w * sc, height: h * sc };
 }
 function tag(text: string, kind: "" | "good" | "warn" | "mastery" = ""): void {
-  ui.column(`tag-${text}`, () => ui.style(kind ? `tag-${kind}-text` : "tag-text").label(text), { style: kind ? `tag-${kind}` : "tag" });
+  ui.column(`tag-${text}`, () => ui.style(__l10nStyle(kind ? `tag-${kind}-text` : "tag-text")).label(text), { style: kind ? `tag-${kind}` : "tag" });
 }
 
 // ------------------------------------------------------------------ the frame
@@ -125,8 +143,8 @@ function topbar(L: Layout): void {
     button({ id: "chip-daily", text, name: text, style: "chip", act: () => { navigateDaily(); }, content: () => para(text, w - 30, "chip-text") });
   };
   const icons = (): void => void ui.row("topbar-actions", () => {
-    button({ id: "btn-help-top", text: "?", name: T("Help"), style: "icon-btn", act: () => openOverRound("help"), content: () => ui.style("icon-glyph").label("?") });
-    button({ id: "btn-settings-top", text: "⚙", name: T("Settings"), style: "icon-btn", act: () => openOverRound("settings"), content: () => ui.style("icon-glyph").label("⚙") });
+    button({ id: "btn-help-top", text: "?", name: T("Help"), style: "icon-btn", act: () => openOverRound("help"), content: () => ui.style(__l10nStyle("icon-glyph")).label("?") });
+    button({ id: "btn-settings-top", text: "⚙", name: T("Settings"), style: "icon-btn", act: () => openOverRound("settings"), content: () => ui.style(__l10nStyle("icon-glyph")).label("⚙") });
   }, { spacing: 8, align: "center" });
   const bar = ui.place("topbar", { anchor: "top-start", x: 0, y: 0 }, () => {
     ui.column("topbar-col", () => {
@@ -193,7 +211,7 @@ function playArea(L: Layout, barH: number, railW: number): void {
   });
   rect(hud);
   const score = ui.place("hud-score", { anchor: "top-end", x: hudR, y: st.y + 8 }, () => {
-    ui.column("hud-score-box", () => ui.style("hud-score-text").id("hud-score").label(String(s.score.total)), { style: "hud-box" });
+    ui.column("hud-score-box", () => ui.style(__l10nStyle("hud-score-text")).id("hud-score").label(String(s.score.total)), { style: "hud-box" });
   });
   rect(score);
   // The board mirror for screen readers (index.html #board-mirror), refreshed at most once a second.
@@ -204,7 +222,7 @@ function playArea(L: Layout, barH: number, railW: number): void {
     const big = Math.max(64, Math.min(144, 0.18 * Math.min(L.lw, L.lh))); // clamp(4rem, 18vmin, 9rem)
     const size = big * (1.35 - 0.4 * Math.min(1, age));
     ui.place("countdown", { anchor: "top-start", x: st.x, y: st.y + st.h / 2 - size * 0.7 }, () => {
-      ui.column("countdown-col", () => { ui.style("countdown", { text: { size } }).id("countdown").label(app.countdown!.text); }, { width: st.w, align: "center" });
+      ui.column("countdown-col", () => { ui.style(__l10nStyle("countdown"), __l10nStyle({ text: { size } })).id("countdown").label(app.countdown!.text); }, { width: st.w, align: "center" });
     });
   }
   // The caption (above the thumb zone) and the tray.
@@ -278,7 +296,7 @@ function tray(L: Layout, st: { x: number; y: number; w: number; h: number }): vo
     ui.column("dpad", () => {
       const cell = (dir: Dir | null, glyph: string, label: string): void => {
         if (!dir) { ui.widget("", { role: "none", size: { width: size, height: size } }); return; }
-        button({ id: `tray-${dir}`, text: glyph, name: T(label), style: "tray-btn", width: size, height: size, disabled: !live, click: false, act: () => playerSteer(dir), content: () => ui.style("tray-glyph").label(glyph) });
+        button({ id: `tray-${dir}`, text: glyph, name: T(label), style: "tray-btn", width: size, height: size, disabled: !live, click: false, act: () => playerSteer(dir), content: () => ui.style(__l10nStyle("tray-glyph")).label(glyph) });
       };
       ui.row("dpad-1", () => { cell(null, "", ""); cell("up", "▲", N("Steer up")); cell(null, "", ""); }, { spacing: gap });
       ui.row("dpad-2", () => { cell("left", "◀", N("Steer left")); cell(null, "", ""); cell("right", "▶", N("Steer right")); }, { spacing: gap });
@@ -296,7 +314,7 @@ function tray(L: Layout, st: { x: number; y: number; w: number; h: number }): vo
       for (const [id, glyph, name, act, disabled] of list) {
         button({
           id, text: name, name, style: "tray-btn", width: size, height: size, disabled, act,
-          content: () => glyph ? ui.style("tray-glyph").label(glyph) : ui.widget("", {
+          content: () => glyph ? ui.style(__l10nStyle("tray-glyph")).label(glyph) : ui.widget("", {
             role: "none", size: { width: 22, height: 22 },
             draw: (r, s) => { const bw = 5 * s.scale; draw.rect(r.x + r.width / 2 - bw * 1.5, r.y + 2 * s.scale, bw, r.height - 4 * s.scale, token("ink")); draw.rect(r.x + r.width / 2 + bw * 0.5, r.y + 2 * s.scale, bw, r.height - 4 * s.scale, token("ink")); },
           }),
@@ -511,10 +529,10 @@ function stageRow(id: string, num: string, name: string, w: number, locked: bool
   button({
     id, text: label, name: label, style: "stage-row", width: w, disabled: locked, act,
     content: () => ui.row(`${id}-face`, () => {
-      if (num) ui.column(`${id}-n`, () => ui.style("stage-num").label(num), { width: 36 });
+      if (num) ui.column(`${id}-n`, () => ui.style(__l10nStyle("stage-num")).label(num), { width: 36 });
       ui.column(`${id}-name`, () => para(name, Math.max(60, w - 30 - (num ? 44 : 0) - tags.length * 80 - (best ? 90 : 0)), "stage-name"), { grow: 1 });
       for (const [t, k] of tags) tag(t, k);
-      if (best) ui.style("stage-best").label(best);
+      if (best) ui.style(__l10nStyle("stage-best")).label(best);
     }, { spacing: 8, align: "center", width: w - 28 }),
   });
 }
@@ -625,11 +643,11 @@ function resultsScreen(w: number, L: Layout): void {
     ui.column("score-table", () => {
       rows.forEach(([k, n], i) => ui.row(`score-${i}`, () => {
         ui.column(`score-${i}-k`, () => para(k, inner - 100, "td"), { grow: 1 });
-        ui.style("td-num").id(`score-${i}-v`).label(String(n));
+        ui.style(__l10nStyle("td-num")).id(`score-${i}-v`).label(String(n));
       }, { style: "score-row", width: inner, align: "center" }));
       ui.row("score-total-row", () => {
         ui.column("score-total-k", () => para(T("Total"), inner - 100, "total"), { grow: 1 });
-        ui.style("total-num").id("score-total").label(String(r.score.total));
+        ui.style(__l10nStyle("total-num")).id("score-total").label(String(r.score.total));
       }, { style: "score-total", width: inner, align: "center" });
     }, { width: inner, spacing: 0 });
     const n = r.invalidActions;
@@ -673,7 +691,7 @@ function helpScreen(w: number, L: Layout): void {
   cardGrid("help-cards", cards.length, w, 200, 11, (i, cw) => {
     const [g, t, d] = cards[i]!;
     ui.column(`help-card-${i}`, () => {
-      ui.style("help-glyph").label(g);
+      ui.style(__l10nStyle("help-glyph")).label(g);
       para(t, cw - 28, "help-h3");
       para(d, cw - 28, "help-p", `help-text-${i}`);
     }, { style: "help-card", width: cw, spacing: 4 });
@@ -713,7 +731,7 @@ function settingsScreen(w: number, L: Layout): void {
   card("settings-runtime", w, (inner) => {
     para(T("Sound, graphics, language, larger text, high contrast and reduced motion are in the StarHermit Options."), inner, "dim-small", "options-note");
     flow("settings-runtime-btns", [
-      { id: "btn-options", text: T("Open Options"), style: "btn-small", act: () => openMenu() },
+      { id: "btn-options", text: T("Open Options"), style: "btn-small", act: () => __l10nOptions() },
       { id: "btn-rebind", text: T("Key bindings"), style: "btn-small", act: () => requestRebind() },
     ], inner, 10, "start");
   });
@@ -818,10 +836,10 @@ function boardsScreen(w: number, L: Layout): void {
     board.entries.forEach((e, i) => {
       const meta = [e.ruleset, e.seed != null ? T("seed {seed}", { seed: e.seed }) : null].filter(Boolean).join(" · ");
       ui.row(`board-row-${i}`, () => {
-        ui.column(`board-row-${i}-n`, () => ui.style("text").label("#" + (i + 1)), { width: 36 });
+        ui.column(`board-row-${i}-n`, () => ui.style(__l10nStyle("text")).label("#" + (i + 1)), { width: 36 });
         ui.column(`board-row-${i}-name`, () => para(pname(e.name) + (meta ? " · " + meta : ""), w - 36 - 150 - 30, "text-small"), { grow: 1 });
-        ui.style("strong").id(`board-row-${i}-score`).label(String(e.score));
-        ui.column(`board-row-${i}-when`, () => ui.style("dim-tiny").label(e.when || ""), { width: 80, align: "end" });
+        ui.style(__l10nStyle("strong")).id(`board-row-${i}-score`).label(String(e.score));
+        ui.column(`board-row-${i}-when`, () => ui.style(__l10nStyle("dim-tiny")).label(e.when || ""), { width: 80, align: "end" });
       }, { style: e.me ? "board-row-me" : "board-row", width: w, spacing: 10, align: "center" });
     });
   }, { spacing: 6, width: w });
