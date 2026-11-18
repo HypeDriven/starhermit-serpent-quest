@@ -30,13 +30,9 @@
 // and the frame-rate readout are the runtime's. Rendering never touches the
 // rules state.
 import {
-  ACESFilmicToneMapping, AdditiveBlending, BoxGeometry, BufferAttribute, BufferGeometry, CircleGeometry, Color, ConeGeometry,
-  CylinderGeometry, DirectionalLight, DoubleSide, Euler, Float32BufferAttribute, Fog, Group, HemisphereLight, IcosahedronGeometry,
-  InstancedMesh, Matrix3, Matrix4, Mesh, MeshBasicMaterial, MeshLambertMaterial, MeshPhysicalMaterial, MeshStandardMaterial,
-  NoColorSpace, PerspectiveCamera, PlaneGeometry, PMREMGenerator, ParticleEmitter, Points, PointsMaterial, Quaternion, Raycaster, RepeatWrapping,
-  RingGeometry, RoomEnvironment, SphereGeometry, TextureLoader, TorusGeometry, Vector3, pointerToNdc, renderer, scene,
-  SRGBColorSpace, type Material, type MaterialHooks, type Object3D, type OrthographicCamera, type Texture,
+  ACESFilmicToneMapping, AdditiveBlending, BoxGeometry, BufferAttribute, BufferGeometry, CircleGeometry, Color, ConeGeometry, CylinderGeometry, DirectionalLight, DoubleSide, Euler, Float32BufferAttribute, Fog, Group, HemisphereLight, IcosahedronGeometry, InstancedMesh, Matrix3, Matrix4, Mesh, MeshBasicMaterial, MeshLambertMaterial, MeshPhysicalMaterial, MeshStandardMaterial, NoColorSpace, PerspectiveCamera, PlaneGeometry, PMREMGenerator, Points, PointsMaterial, Quaternion, Raycaster, RepeatWrapping, RingGeometry, RoomEnvironment, SphereGeometry, TextureLoader, TorusGeometry, Vector3, pointerToNdc, renderer, scene, SRGBColorSpace, type Material, type MaterialHooks, type Object3D, type OrthographicCamera, type Texture,
 } from "starhermit:scene";
+import { GPUParticleEmitter } from "starhermit:particles";
 import type { Cell, Dir, GameEvent, RulesConfig, State, Theme } from "./game.ts";
 import { PARTICLE_SCALE, flowerCount, grassCount, type Look } from "./quality.ts";
 
@@ -217,7 +213,7 @@ function surface(p: Params, physical = false): Material {
 /** The bursts: one emitter per colour (an emitter's colour is read for its live particles too), made as bursts ask. */
 class ParticlePool {
   readonly material: PointsMaterial;
-  private readonly emitters = new Map<number, ParticleEmitter>();
+  private readonly emitters = new Map<number, GPUParticleEmitter>();
   private readonly share: number;
   constructor(private readonly parent: Object3D, readonly max: number, detailed: boolean) {
     this.share = max / MAX_PARTICLES;
@@ -232,7 +228,7 @@ class ParticlePool {
     const speed = [1.6, 2.6, 4.2][tier]!, up = [2.2, 3.2, 5.0][tier]!, lifeBase = [0.45, 0.6, 0.9][tier]!;
     let e = this.emitters.get(hex);
     if (!e) {
-      e = new ParticleEmitter({ capacity: this.max, material: this.material, seed: (0x5eed + hex) >>> 0, space: "local", color: hex, gravity: [0, -7.5, 0], opacity: [1, 0] });
+      e = new GPUParticleEmitter({ capacity: this.max, material: this.material, seed: (0x5eed + hex) >>> 0, space: "local", color: hex, gravity: [0, -7.5, 0], opacity: [1, 0] });
       e.frustumCulled = false;
       this.parent.add(e);
       this.emitters.set(hex, e);

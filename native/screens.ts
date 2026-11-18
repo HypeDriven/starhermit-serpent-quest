@@ -104,7 +104,7 @@ function tag(text: string, kind: "" | "good" | "warn" | "mastery" = ""): void {
 }
 
 // ------------------------------------------------------------------ the frame
-export function drawScreens(): void {
+function drawScreensImmediate(): void {
   const L = layoutNow();
   const barH = topbarHeight(L);
   const railW = L.wide ? 260 : 0;
@@ -114,7 +114,6 @@ export function drawScreens(): void {
   else if (app.pause && session?.paused) pauseCard(L);
   else if (app.drawer) drawerSheet(L, barH);
   topbar(L);
-  toastLine(L, barH);
   const f = frame();
   if (app.focusNext) {
     const age = f.frame - app.openedFrame;
@@ -327,18 +326,6 @@ function tray(L: Layout, st: { x: number; y: number; w: number; h: number }): vo
   rect(a); rect(b);
 }
 
-// ------------------------------------------------------------------ toast (index.html #toast)
-function toastLine(L: Layout, barH: number): void {
-  const t = app.toast;
-  if (!t) return;
-  const floating = !!app.screen || !session;
-  const w = Math.min(L.lw * 0.8, 46 * 8);
-  const st = { x: L.wide && !floating ? 260 : 0, w: L.wide && !floating ? L.lw - 520 : L.lw };
-  const y = floating ? L.lh - 20 - 44 : barH + (L.lh - barH) * 0.72 - 20;
-  ui.place("toast", { anchor: "top-start", x: st.x, y }, () => {
-    ui.column("toast-row", () => ui.column("toast-box", () => para(t.text, w - 30, t.warn ? "toast-warn-text" : "toast-text", "toast-text"), { style: t.warn ? "toast-warn" : "toast", align: "center" }), { width: st.w, align: "center" });
-  });
-}
 
 // ------------------------------------------------------------------ the pause card (index.html #pause-overlay)
 function pauseCard(L: Layout): void {
@@ -843,4 +830,11 @@ function boardsScreen(w: number, L: Layout): void {
       }, { style: e.me ? "board-row-me" : "board-row", width: w, spacing: 10, align: "center" });
     });
   }, { spacing: 6, width: w });
+}
+
+export function drawScreens(): void {
+  if (app.screen !== "help") { drawScreensImmediate(); return; }
+  const actions = ["up","down","left","right","pause","undo","hint","camera_reset"];
+  const version = JSON.stringify([(app as any).settings ?? (app as any).options ?? {}, (platform as any).options ?? {}, actions.map((action) => bindings(action))]);
+  ui.retain!("help-screen", version, drawScreensImmediate);
 }

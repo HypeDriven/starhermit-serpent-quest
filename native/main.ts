@@ -118,9 +118,7 @@ export function announce(text: string, assertive = false): void {
   pendingAnnounce = { text: text.slice(0, 500), assertive };
 }
 export function toast(text: string, kind = ""): void {
-  // over menus the engine's toasts do; the round's line sits over the playfield
-  if (app.screen || !session) { ui.toast!(text, { duration: 2.6, style: ["toast-box", kind === "warn" ? "toast-warn-text" : "toast-text"], dismissible: false }); return; }
-  app.toast = { text, warn: kind === "warn", until: clockMs + 2600 };
+  ui.toast!(text, { kind: kind === "warn" ? "warning" : "info", duration: 2.6, position: app.screen || !session ? "bottom" : "top", offset: app.screen || !session ? 20 : 64, style: ["toast-box", kind === "warn" ? "toast-warn-text" : "toast-text"], dismissible: false });
   if (kind === "warn") announce(text, true);
 }
 function caption(text: string): void {
