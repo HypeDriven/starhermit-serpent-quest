@@ -12,7 +12,7 @@
     "metadataSource": "starhermit.txt",
     "createdAt": "2026-09-01T07:01:06.950106+00:00",
     "coverArtSource": "manifest",
-    "coverArtUpdatedAt": "2026-11-18T17:52:51.157453+00:00",
+    "coverArtUpdatedAt": "2026-11-22T14:25:50.882464+00:00",
     "submittedByUserId": "2712e04e-461b-4d23-81ae-e40b429128a8",
     "submittedByUsername": "starhermit",
     "hosting": {
@@ -22,9 +22,9 @@
       "pinnedCommitSha": null,
       "deployedCommitSha": null,
       "deployError": null,
-      "deployedAt": "2026-11-18T17:52:51.146747+00:00",
+      "deployedAt": "2026-11-22T14:25:50.871283+00:00",
       "externalLaunchUrl": null,
-      "engineVersion": "1.44.1",
+      "engineVersion": "1.47.0",
       "deployWarning": null
     },
     "description": "Steer a growing serpent through garden arenas, collecting food and defeating smaller rivals while avoiding larger threats.",
@@ -36,19 +36,19 @@
     "links": [],
     "isDisabled": false
   },
-  "publishedAt": "2026-11-18T17:52:51.129Z",
-  "sourceCommit": "6609febca193cc66fbbc64db34ac44488b756ab2",
-  "bytesReceived": 3319081,
-  "archiveSha256": "abdb674aa1a420fca256091c4835d8199eb0218e0a204ad0d17e635e8989606f",
+  "publishedAt": "2026-11-22T14:25:51.281Z",
+  "sourceCommit": "48d4d7d5dd6398aea382500aa04e8d8af3945952",
+  "bytesReceived": 3319518,
+  "archiveSha256": "e2866850fdc9e5b9e947de84cb159ba0ac0d3b796e5e348c343d7bb50ccdd6bf",
   "indexSha256": "a0120be7028d1f3eea14f13590266b36724f816c6701037852c4ecb713f83212",
   "result": {
     "clientPublished": true,
     "serverImageLoaded": false,
     "imageDigest": null,
-    "bytesReceived": 3319081,
+    "bytesReceived": 3319518,
     "mode": "replace",
     "filesRemoved": 0,
-    "engineVersion": "1.44.1",
+    "engineVersion": "1.47.0",
     "deployWarning": null
   },
   "liveVerification": {
