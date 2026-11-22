@@ -6,7 +6,7 @@
 // the files, i.e. that `npm run package` ran after the last change. Today's
 // Daily is played by the rules bot as tests/native/daily.today.play (written
 // at test time by tools/gen-plays.mjs: the garden follows the UTC day). STARHERMIT
-// names the runtime (default: the published 1.44.1 Linux runtime under
+// names the runtime (default: the published 1.47.0 Linux runtime under
 // ~/sh/runtime); TSC the TypeScript compiler (default ~/sh/runtime/ts).
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -18,7 +18,7 @@ import { writeFileSync } from 'node:fs';
 import { weeklyScript } from '../tools/gen-plays.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const fallback = join(homedir(), 'sh/runtime/1.44.1/starhermit-1.44.1-linux-x86_64/starhermit');
+const fallback = join(homedir(), 'sh/runtime/1.47.0/starhermit-1.47.0-linux-x86_64/starhermit');
 const exe = process.env.STARHERMIT || (existsSync(fallback) ? fallback : null);
 const tsc = process.env.TSC || join(homedir(), 'sh/runtime/ts/node_modules/.bin/tsc');
 let failed = 0;
@@ -45,7 +45,7 @@ if (!exe) {
   process.exit(failed ? 1 : 0);
 }
 try {
-  const out = execFileSync(exe, ['check', '.', '--quiet'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const out = execFileSync(exe, ['check', '.', '--quiet', '--no-motion-blur'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   const warnings = out.split('\n').filter((l) => /^warning/i.test(l));
   if (warnings.length) fail('starhermit check', warnings.join('\n'));
   else console.log('ok - starhermit check');
@@ -54,7 +54,7 @@ writeFileSync(join(root, 'tests', 'native', 'daily.today.play'), weeklyScript(ne
 const only = process.argv.slice(2);
 for (const f of readdirSync(join(root, 'tests', 'native')).filter((n) => n.endsWith('.play') && (!only.length || only.some((o) => n.includes(o)))).sort()) {
   try {
-    execFileSync(exe, ['.', '--render-check', '--guest', '--script', `tests/native/${f}`], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    execFileSync(exe, ['.', '--render-check', '--no-motion-blur', '--guest', '--script', `tests/native/${f}`], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     console.log(`ok - ${f}`);
   } catch (e) { fail(f, e); }
 }
